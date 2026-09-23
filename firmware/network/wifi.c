@@ -89,6 +89,12 @@ esp_err_t network_wifi_connect(uint32_t *out_ip_be) {
         esp_wifi_start() != ESP_OK) {
         return ESP_FAIL;
     }
+    /* Dev workaround for weak USB power (brownout on TX bursts):
+     * cap TX at ~13 dBm instead of 20 dBm. Production hardware with a
+     * proper supply + Ethernet does not need this. Unit: 0.25 dBm. */
+    if (esp_wifi_set_max_tx_power(52) != ESP_OK) {
+        ESP_LOGW(TAG, "could not cap tx power");
+    }
 
     bits = xEventGroupWaitBits(s_ev, WIFI_GOT_IP_BIT | WIFI_FAIL_BIT,
                                pdFALSE, pdFALSE, portMAX_DELAY);

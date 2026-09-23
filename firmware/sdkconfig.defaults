@@ -5,6 +5,9 @@
 #   idf.py set-target esp32
 CONFIG_IDF_TARGET="esp32"
 
+# WROOM-32D carries 4 MB flash (boot log confirms 4096k detected).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # Watchdog is mandatory for a quorum appliance (AGENTS.md §11).
