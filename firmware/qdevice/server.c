@@ -6,10 +6,10 @@
  *   real votes travel by server-pushed VOTE_INFO, NACKs before ACKs,
  *   sequenced by VOTE_INFO_REPLY matching (like the reference).
  * - ASK_FOR_VOTE is unsupported under FFSplit (reference behavior).
- * - Single-cluster dev scope (8 clients / 32 nodes table caps): a second
- *   cluster_name is refused with connection close (documented in docs/).
- * - Advertised max message 4096 (RX stash size); bigger frames are drained
- *   and answered MESSAGE_TOO_LONG. Honest limits, bounded RAM.
+ * - Single-cluster dev scope (8 vote-table slots / 32 nodes, 2 concurrent
+ *   sessions on classic ESP32 RAM): a second cluster_name is refused.
+ * - Advertised max message 32768 (reference minimum); bigger frames are
+ *   drained and answered MESSAGE_TOO_LONG. Bounded, honest RAM budget.
  * - Task watchdog fed every loop wake (recv timeout 5s < WDT 10s).
  */
 #include "server.h"
@@ -39,8 +39,14 @@ static const char *TAG = "QDEVICE";
 static const char *PTAG = "PROTOCOL";
 static const char *STAG = "STATE";
 
-#define QESP_MAX_SESSIONS 4
-#define QESP_RX_SIZE 4096
+/* Session budget (ESP32 classic RAM): 2 concurrent clients x (32K RX + 2K
+ * TX + 16K stack + ~35K TLS) ~= 170K of ~230K free heap. Enough for 2-node
+ * clusters (the FFSplit target). Bigger clusters need PSRAM hardware.
+ * RX honors the reference 32K minimum a server must accept (qnet-config.h);
+ * the real client aborts otherwise (observed: "Server accepts maximum 4096
+ * bytes message but this client minimum is 32768 bytes"). */
+#define QESP_MAX_SESSIONS 2
+#define QESP_RX_SIZE QESP_INITIAL_MSG_SIZE
 #define QESP_TX_SIZE 2048
 #define QESP_SESSION_STACK 16384
 #define QESP_SESSION_STACK 16384
