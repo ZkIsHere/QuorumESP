@@ -25,12 +25,13 @@ ai → NACK tất cả.
 
 ## 2. Trạng thái port
 
-- ✅ Decision core (`ffsplit.c`) + 9 scenario test trên host (`quorum/test/`):
-  single, healthy pair, split-brain lowest/highest, odd majority, heuristics,
-  keep-active, unstable config, leave, table limits.
-- ⏳ Chưa đấu vào `server.c`: hiện vẫn reply ACK cố định. Đấu nối đúng chuẩn
-  reference = reply `NO_CHANGE` + đẩy `VOTE_INFO` (NACK trước, ACK sau khi
-  NACK được ack theo seq). Làm ở bước tiếp theo.
+- ✅ Decision core (`ffsplit.c`) + 9 scenario test trên host (`quorum/test/`).
+- ✅ Đấu vào `server.c`: multi-client tasks, reply trạng thái, VOTE_INFO push
+  NACK-trước-ACK-sau, track seq, task watchdog, session cap 2 (RAM).
+- ✅ Live 2-client (node1 thật + node2 giả `host/tools/fake-node.py`,
+  2026-09-23): tie→lowest thắng (node1 ACK/node2 NACK); kill node1→node2
+  flip ACK; node1 quay lại khi node2 còn sống→vẫn NACK (keep-active dính);
+  kill node2→node1 ACK lại. Khớp reference semantics.
 - ⏳ LMS chưa port (chỉ FFSplit production lúc này).
 
 ## 3. Câu hỏi mở (cần interop 2 node thật)
