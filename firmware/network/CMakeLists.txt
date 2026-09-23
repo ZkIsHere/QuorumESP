@@ -32,7 +32,7 @@ endif()
 
 idf_component_register(SRCS ${TLS_SRCS}
                        INCLUDE_DIRS "."
-                       REQUIRES log esp_wifi esp_netif esp_event esp-tls mbedtls)
+                       REQUIRES log esp_wifi esp_netif esp_event esp-tls mbedtls esp_timer)
 if(TLS_DEFS)
   target_compile_definitions(${COMPONENT_LIB} PRIVATE ${TLS_DEFS})
 endif()
