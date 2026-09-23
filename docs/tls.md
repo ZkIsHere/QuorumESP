@@ -73,7 +73,21 @@ Fallback nếu NSS khó: vòng 2a cho server **không yêu cầu** client cert
 | 2c | client `tls: required` + server plaintext | client từ chối (đã cover ở harness) |
 | 2d | cert hết hạn (days=0..1) | handshake fail, không ACTIVE |
 
-## 6. Không làm ở vòng 2
+## 7. Kết quả vòng 2a (client thật, 2026-09-23) — PASS
+
+- ESP32 (mbedTLS qua public esp-tls API) + `corosync-qdevice` 3.1.9 (NSS,
+  `tls: on`): `PREINIT → STARTTLS → TLS handshake done → INIT trong TLS →
+  ACTIVE node=1 algo=1 hb=8000`. Cipher đàm phán: `TLS 1.2
+  ECDHE-RSA-AES256-GCM-SHA384` (đo bằng probe Python độc lập).
+- Client NSS verify chain dev-CA + CN=`Qnetd Server`. Cert cũ (`CN=Qnetd Dev`)
+  bị từ chối đúng như thiết kế — bắt được nhờ probe, không phải đoán.
+- Tool: `host/tools/tls-probe.py` (PREINIT→STARTTLS→đọc cert/cipher, không
+  verify — chỉ debug).
+- Lưu ý build: cert embed lúc **configure** (`certs_embed.c` generate bởi
+  CMake) — copy cert mới xong phải `reconfigure + build + flash`, flash bản
+  cũ là serve cert cũ.
+
+## 8. Không làm ở vòng 2 (đánh số lại từ §6 cũ)
 
 - Rotation/renew tự động, SNI, session resumption, TLS 1.3-only.
 - Web/provisioning cert (để sau cùng với management UI).
