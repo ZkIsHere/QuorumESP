@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 
 #include "server.h"
+#include "ota.h"
 #include "time_sync.h"
 #include "tls.h"
 #include "wifi.h"
@@ -43,6 +44,9 @@ void app_main(void) {
     if (network_time_sync() != ESP_OK) {
         ESP_LOGW(TAG, "no wall-clock — mutual TLS will fail-closed");
     }
+#if CONFIG_QUORUMESP_OTA_CHECK
+    quorumesp_ota_check_and_update(); /* reboots on success, else continues */
+#endif
     if (network_tls_init() != ESP_OK) {
         ESP_LOGW(TAG, "TLS unavailable (no dev certs) — plaintext only");
     }
@@ -52,4 +56,6 @@ void app_main(void) {
     }
     ESP_LOGI(TAG, "up. point your qdevice client at this IP, port %d",
              CONFIG_QUORUMESP_SERVER_PORT);
+    quorumesp_ota_confirm_task_start(); /* rollback guard (docs/ota.md) */
+}
 }

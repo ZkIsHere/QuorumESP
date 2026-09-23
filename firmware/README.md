@@ -31,6 +31,7 @@ firmware/
 ├── config/        versioned persistent config  (Phase 2)
 ├── storage/       NVS wrapper                  (Phase 2)
 ├── watchdog/      HW + task watchdog           (Phase 2)
+├── ota/           update engine + rollback      (docs/ota.md)
 ├── web/           diagnostic API, post-core    (Phase 10)
 └── diagnostics/   logging categories           (Phase 2)
 ```
