@@ -69,9 +69,9 @@ Fallback nếu NSS khó: vòng 2a cho server **không yêu cầu** client cert
 | # | Cấu hình | Kỳ vọng |
 |---|---|---|
 | 2a | client `tls: on`, server có cert, không yêu cầu client cert | STARTTLS → handshake → INIT trong TLS → ACTIVE |
-| 2b | + server yêu cầu client cert (CN=cluster) | như 2a + sai CN thì ngắt |
+| 2b | + server yêu cầu client cert (CN=cluster) | như 2a + sai CN thì ngắt — **PASS 2026-09-23** |
 | 2c | client `tls: required` + server plaintext | client từ chối (đã cover ở harness) |
-| 2d | cert hết hạn (days=0..1) | handshake fail, không ACTIVE |
+| 2d | cert hết hạn (days=0..1) | handshake fail, không ACTIVE — **PASS 2026-09-23** (probe openssl, CN đúng nhưng hết hạn → sập ở handshake) |
 
 ## 7. Kết quả vòng 2a (client thật, 2026-09-23) — PASS
 
@@ -87,7 +87,25 @@ Fallback nếu NSS khó: vòng 2a cho server **không yêu cầu** client cert
   CMake) — copy cert mới xong phải `reconfigure + build + flash`, flash bản
   cũ là serve cert cũ.
 
-## 8. Không làm ở vòng 2 (đánh số lại từ §6 cũ)
+## 8. Kết quả vòng 2b + 2d (client thật, 2026-09-23) — PASS
+
+- Mutual TLS end-to-end với `corosync-qdevice` 3.1.9 (NSS, Cluster Cert
+  CN=`interop-test` enroll theo flow reference): `STARTTLS → handshake →
+  client CN verified (interop-test) → ACTIVE node=1 algo=1 hb=8000`,
+  message mã hóa 2 chiều, đóng clean bằng close_notify.
+- Cert hết hạn (CN đúng, hết hạn): handshake bị ngắt, không session.
+- Bẫy đã gặp và fix (ghi để không tái diễn):
+  1. esp-tls **không wire `ca_chain` phía server** → CertificateRequest mang
+     CA list rỗng → client không chọn cert gửi. Mutual phải dùng raw mbedTLS
+     với `OPTIONAL + ca_chain`, enforcement bằng verify callback + CN check.
+  2. IDF tắt `MBEDTLS_SSL_KEEP_PEER_CERTIFICATE` (default n) → post-handshake
+     `get_peer_cert()` luôn NULL. Verify phải làm **trong handshake**.
+  3. IDF tắt `MBEDTLS_HAVE_TIME_DATE` (default n) → expiry bị bỏ qua hoàn
+     toàn. Đã bật trong `sdkconfig.defaults`; cần SNTP đúng giờ
+     (`network/time_sync.c`), sai giờ fail-closed là đúng.
+  4. mbedTLS server authmode default là NONE (chỉ client default REQUIRED).
+
+## 9. Không làm ở vòng 2 (đánh số lại từ §6 cũ)
 
 - Rotation/renew tự động, SNI, session resumption, TLS 1.3-only.
 - Web/provisioning cert (để sau cùng với management UI).
