@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     container: espressif/idf:v6.1
     steps:
-      - name: Clone source (no checkout action: container has no node)
+      - name: "Clone source (no checkout action: container has no node)"
         run: |
           if [ "${GITHUB_REF_TYPE}" = tag ]; then
             git clone --depth 1 --branch "${GITHUB_REF_NAME}" \
