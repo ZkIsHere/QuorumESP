@@ -281,7 +281,18 @@ TCP connect (client non-blocking; thành công ở non_blocking_client_socket_wr
 - Không còn `SERVER_ERROR` nào trong suốt phiên. Vòng 1 coi như pass ở mức
   framing/handshake/steady-state plaintext.
 
-### 7.6. Còn UNVERIFIED (cần interop `docs/interop.md` + đọc tiếp)
+### 7.6. Quan sát ESP32 live (firmware C, WROOM-32D + Wi-Fi dev, 2026-09-23)
+
+- Client thật (`corosync-qdevice` 3.1.9 trong WSL, trỏ vào IP Wi-Fi của ESP32)
+  hoàn thành handshake với firmware C:
+  `CONNECTED -> PREINIT_DONE -> ACTIVE node=1 algo=1 hb=8000`.
+- Chứng minh codec C (`tlv.c`/`msg.c`, zero-malloc) và session C (`server.c`)
+  tương thích byte với client thật, không chỉ với harness.
+- Bug thực tế đã bắt được nhờ client thật: `recv_frame` dùng full-frame check
+  cho header-only buffer → TRUNC oan cho mọi message có payload. Fix bằng
+  `qesp_msg_check_header()` + regression test trên host.
+
+### 7.7. Còn UNVERIFIED (cần interop `docs/interop.md` + đọc tiếp)
 
 - Reconnect backoff phía client (không nằm trong 3 file đã đọc, nghi ở
   `qdevice-net-instance.c`).
