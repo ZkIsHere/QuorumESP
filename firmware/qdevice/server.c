@@ -336,8 +336,8 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
                 return -1;
             }
             s->ff_idx = idx;
-            s_ff.clients[idx].tb_mode = (uint8_t)m.tie_breaker.mode;
-            s_ff.clients[idx].tb_node = m.tie_breaker.node_id;
+            s_ff.clients[idx].tb_mode = m.tie_mode;
+            s_ff.clients[idx].tb_node = m.tie_node;
             s_tp[idx] = s->tp_ref;
         }
         s->st = ST_ACTIVE;
