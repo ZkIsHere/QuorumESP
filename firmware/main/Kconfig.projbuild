@@ -21,6 +21,11 @@ menu "QuorumESP dev"
         default ""
         depends on QUORUMESP_OTA_CHECK
 
+    config QUORUMESP_OTA_GITHUB_REPO
+        string "GitHub repo for release OTA (owner/name, empty = use OTA_URL)"
+        default ""
+        depends on QUORUMESP_OTA_CHECK
+
     config QUORUMESP_REQUIRE_CLIENT_CERT
         bool "Require + verify client certificate (round 2b mutual auth)"
         default n
