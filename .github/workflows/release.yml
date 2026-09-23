@@ -1,0 +1,78 @@
+# Release: build firmware in the official IDF container and publish a
+# GitHub Release carrying firmware.bin + version.txt for on-device OTA.
+#
+# Triggers:
+#   - tag push v*  -> build + publish release (device-installable)
+#   - manual dispatch -> build only (validates the pipeline)
+#
+# Version scheme: release builds bake -DPROJECT_VER=<tag>; the device
+# compares it with version.txt byte-for-byte. Local dev builds use the git
+# hash instead, so a release always differs from (and supersedes) dev builds.
+# The release repo must be PUBLIC (device downloads without a token).
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1
+    steps:
+      - name: Clone source (no checkout action: container has no node)
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            git clone --depth 1 --branch "${GITHUB_REF_NAME}" \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /project
+            echo "VER=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          else
+            git clone --depth 1 \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /project
+            echo "VER=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build firmware
+        run: |
+          cd /project/firmware
+          idf.py -DPROJECT_VER="$VER" -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" build
+
+      - name: Package artifacts
+        run: |
+          cd /project/firmware
+          printf '%s' "$VER" > version.txt
+          cp build/QuorumESP.bin firmware.bin
+          ls -la firmware.bin version.txt
+          sha256sum firmware.bin
+
+      - name: Install gh (for publish only)
+        if: github.ref_type == 'tag'
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl gnupg
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg status=none
+          chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          apt-get update -qq
+          apt-get install -y -qq gh
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        run: |
+          cd /project/firmware
+          gh release create "$VER" firmware.bin version.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$VER (EXPERIMENTAL)" \
+            --notes "Experimental QuorumESP dev preview. Plain-HTTP LAN OTA is NOT in this build; device pulls these assets over HTTPS. No production TLS provisioning yet — see docs. Vote logic: FFSplit. Do not deploy to production clusters."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

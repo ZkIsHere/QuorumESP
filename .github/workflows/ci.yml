@@ -21,3 +21,8 @@ jobs:
       - name: Run host protocol tests
         run: npm test
         working-directory: host
+      - name: Run C unit tests (gcc)
+        run: |
+          make -C firmware/qdevice/test
+          make -C firmware/quorum/test
+        working-directory: .
