@@ -235,12 +235,14 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
     }
 }
 
-/* Read exactly one frame (header first, then body). 0 ok, -1 drop/timeout-eof. */
+/* Read exactly one frame (header first, then body). 0 ok, -1 drop/timeout-eof.
+ * NOTE: the header is validated for type/size ONLY here. qesp_msg_check()
+ * must not be used on a header-only buffer — it also demands the body and
+ * would wrongly report TRUNC for every non-empty message. */
 static int recv_frame(int fd, uint8_t *rx, size_t cap, size_t *flen) {
     uint16_t type;
     uint32_t plen;
     size_t got = 0;
-    int rc;
     while (got < QESP_MSG_HEADER_LEN) {
         int n = recv(fd, rx + got, QESP_MSG_HEADER_LEN - got, 0);
         if (n == 0) {
@@ -251,9 +253,10 @@ static int recv_frame(int fd, uint8_t *rx, size_t cap, size_t *flen) {
         }
         got += (size_t)n;
     }
-    rc = qesp_msg_check(rx, got, cap, &type, &plen);
-    if (rc != QESP_OK) {
-        ESP_LOGW(PTAG, "framing reject rc=%d", rc);
+    type = 0;
+    plen = 0;
+    if (qesp_msg_check_header(rx, cap, &type, &plen) != QESP_OK) {
+        ESP_LOGW(PTAG, "bad header (type/size)");
         return -1;
     }
     while (got < QESP_MSG_HEADER_LEN + plen) {

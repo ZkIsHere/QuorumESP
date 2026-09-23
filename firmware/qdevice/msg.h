@@ -80,6 +80,11 @@ typedef struct {
 /* Frame assembly: begin() reserves the header, end() backfills the length. */
 int qesp_msg_begin(qesp_buf_t *b, uint16_t type);
 int qesp_msg_end(qesp_buf_t *b);
+/* Validate 6 header bytes (type range + size cap) WITHOUT demanding the body.
+ * This is the only correct check on a header-only buffer — using qesp_msg_check
+ * here wrongly reports TRUNC for every non-empty message (real bug, 2026-09-23). */
+int qesp_msg_check_header(const uint8_t *hdr6, size_t cap,
+                          uint16_t *type, uint32_t *plen);
 /* Validate a complete frame in place. On success sets type/plen. */
 int qesp_msg_check(const uint8_t *frame, size_t flen, size_t max,
                    uint16_t *type, uint32_t *plen);

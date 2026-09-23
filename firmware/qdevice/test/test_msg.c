@@ -153,8 +153,26 @@ static void test_echo_byte_copy(void) {
     CHECK(memcmp(rep + 2, req + 2, reqlen - 2) == 0);
 }
 
+static void test_header_only_check(void) {
+    /* Regression: recv_frame validates a header-only buffer. Using the full
+     * frame check here would report TRUNC for every non-empty message. */
+    uint8_t mem[512];
+    size_t len = 0;
+    uint16_t t;
+    uint32_t l;
+    uint8_t bad_type[6] = {0x00, 0x63, 0x00, 0x00, 0x00, 0x02};
+    uint8_t huge[6] = {0x00, 0x08, 0x01, 0x00, 0x00, 0x00};
+    CHECK(build(mem, sizeof(mem), mk_init, &len) != 0);
+    /* header-only (6 bytes) must validate WITHOUT demanding the body */
+    CHECK(qesp_msg_check_header(mem, sizeof(mem), &t, &l) == QESP_OK);
+    CHECK(t == QESP_MSG_INIT && l == len - QESP_MSG_HEADER_LEN);
+    CHECK(qesp_msg_check_header(bad_type, sizeof(mem), &t, &l) == QESP_ERR_RANGE);
+    CHECK(qesp_msg_check_header(huge, QESP_INITIAL_MSG_SIZE, &t, &l) == QESP_ERR_NOMEM);
+}
+
 int main(void) {
     test_vectors_byte_exact();
+    test_header_only_check();
     test_decode_roundtrip();
     test_malformed();
     test_echo_byte_copy();

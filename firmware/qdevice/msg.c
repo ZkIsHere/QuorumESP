@@ -45,21 +45,42 @@ int qesp_msg_end(qesp_buf_t *b) {
     return QESP_OK;
 }
 
+int qesp_msg_check_header(const uint8_t *hdr6, size_t cap,
+                          uint16_t *type, uint32_t *plen) {
+    uint16_t t;
+    uint32_t l;
+    if (hdr6 == NULL) {
+        return QESP_ERR_INVAL;
+    }
+    t = (uint16_t)(((uint16_t)hdr6[0] << 8) | hdr6[1]);
+    l = ((uint32_t)hdr6[2] << 24) | ((uint32_t)hdr6[3] << 16) |
+        ((uint32_t)hdr6[4] << 8) | hdr6[5];
+    if (t > QESP_MSG_TYPE_MAX) {
+        return QESP_ERR_RANGE;
+    }
+    if ((size_t)QESP_MSG_HEADER_LEN + l > cap) {
+        return QESP_ERR_NOMEM;
+    }
+    if (type != NULL) {
+        *type = t;
+    }
+    if (plen != NULL) {
+        *plen = l;
+    }
+    return QESP_OK;
+}
+
 int qesp_msg_check(const uint8_t *frame, size_t flen, size_t max,
                    uint16_t *type, uint32_t *plen) {
     uint16_t t;
     uint32_t l;
+    int rc;
     if (frame == NULL || flen < QESP_MSG_HEADER_LEN) {
         return QESP_ERR_TRUNC;
     }
-    t = (uint16_t)(((uint16_t)frame[0] << 8) | frame[1]);
-    l = ((uint32_t)frame[2] << 24) | ((uint32_t)frame[3] << 16) |
-        ((uint32_t)frame[4] << 8) | frame[5];
-    if (t > QESP_MSG_TYPE_MAX) {
-        return QESP_ERR_RANGE;
-    }
-    if ((size_t)QESP_MSG_HEADER_LEN + l > max) {
-        return QESP_ERR_NOMEM;
+    rc = qesp_msg_check_header(frame, max, &t, &l);
+    if (rc != QESP_OK) {
+        return rc;
     }
     if (flen < (size_t)QESP_MSG_HEADER_LEN + l) {
         return QESP_ERR_TRUNC;
