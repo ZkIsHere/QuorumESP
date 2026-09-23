@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 
 #include "server.h"
+#include "time_sync.h"
 #include "tls.h"
 #include "wifi.h"
 
@@ -38,6 +39,9 @@ void app_main(void) {
     if (network_wifi_connect(NULL) != ESP_OK) {
         ESP_LOGE(TAG, "wifi up failed — set creds via menuconfig, then rebuild");
         return;
+    }
+    if (network_time_sync() != ESP_OK) {
+        ESP_LOGW(TAG, "no wall-clock — mutual TLS will fail-closed");
     }
     if (network_tls_init() != ESP_OK) {
         ESP_LOGW(TAG, "TLS unavailable (no dev certs) — plaintext only");
