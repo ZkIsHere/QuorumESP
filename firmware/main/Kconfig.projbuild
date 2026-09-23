@@ -12,4 +12,8 @@ menu "QuorumESP dev"
         int "qnetd-side TCP listen port"
         default 5403
 
+    config QUORUMESP_REQUIRE_CLIENT_CERT
+        bool "Require + verify client certificate (round 2b mutual auth)"
+        default n
+
 endmenu

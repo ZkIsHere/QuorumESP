@@ -121,8 +121,14 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
             qesp_buf_t b;
             uint8_t tls_mode = network_tls_available() ?
                                QESP_TLS_SUPPORTED : QESP_TLS_UNSUPPORTED;
+            uint8_t cert_req =
+#if CONFIG_QUORUMESP_REQUIRE_CLIENT_CERT
+                1;
+#else
+                0;
+#endif
             qesp_buf_init(&b, tx, txcap);
-            if (qesp_msg_preinit_reply(&b, tls_mode, 0,
+            if (qesp_msg_preinit_reply(&b, tls_mode, cert_req,
                                        m.has_seq, m.seq) != QESP_OK) {
                 return -1;
             }
@@ -340,8 +346,14 @@ static void serve_client(int fd) {
         }
         r = on_frame(&s, s_rx, flen, s_tx, sizeof(s_tx), &txlen);
         if (r == UPGRADE_REQ) {
-            /* Round 2a: server-only TLS (no client cert yet). */
-            tp.tls = network_tls_upgrade(tp.fd, NULL, 0);
+            /* Round 2b flag comes from Kconfig; cluster CN for the check. */
+            int need_cc =
+#if CONFIG_QUORUMESP_REQUIRE_CLIENT_CERT
+                1;
+#else
+                0;
+#endif
+            tp.tls = network_tls_upgrade(tp.fd, s.cluster, need_cc);
             if (tp.tls == NULL) {
                 ESP_LOGW(TAG, "TLS upgrade failed, closing");
                 break;
