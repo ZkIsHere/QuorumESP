@@ -59,6 +59,8 @@ sdkconfig.defaults.old
 firmware/.pio/
 
 # --- Debug / temp files ---
+# Interop capture logs (docs/interop.md) — never commit raw captures.
+host/*.jsonl
 *.log
 *.tmp
 *.bak
