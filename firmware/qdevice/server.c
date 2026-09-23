@@ -346,7 +346,10 @@ static void serve_client(int fd) {
         }
         r = on_frame(&s, s_rx, flen, s_tx, sizeof(s_tx), &txlen);
         if (r == UPGRADE_REQ) {
-            /* Round 2b flag comes from Kconfig; cluster CN for the check. */
+            /* require flag from Kconfig; cluster CN for the 2b check.
+             * Upgrade consumes the fd on failure — mark dead so tp_close
+             * (which closes a live fd, or a TLS session owning it) stays
+             * exactly-once. */
             int need_cc =
 #if CONFIG_QUORUMESP_REQUIRE_CLIENT_CERT
                 1;
@@ -356,6 +359,7 @@ static void serve_client(int fd) {
             tp.tls = network_tls_upgrade(tp.fd, s.cluster, need_cc);
             if (tp.tls == NULL) {
                 ESP_LOGW(TAG, "TLS upgrade failed, closing");
+                tp.fd = -1; /* consumed by upgrade (all failure paths) */
                 break;
             }
             s.tls_upgraded = 1;

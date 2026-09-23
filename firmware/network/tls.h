@@ -18,8 +18,9 @@ int network_tls_available(void);
 
 typedef struct qesp_tls_session qesp_tls_session_t;
 
-/* Upgrade an accepted plaintext fd after STARTTLS. Owns fd on success
- * (release with network_tls_close). expected_cn is copied when needed. */
+/* Upgrade an accepted plaintext fd after STARTTLS. On success returns a
+ * session (release with network_tls_close, which closes exactly once).
+ * On NULL the fd is already dead — do not touch it. */
 qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
                                         int require_client_cert);
 /* Blocking, exact length (loops internally). <0 on any failure. */
