@@ -1,0 +1,85 @@
+# QuorumESP .gitignore — per AGENTS.md §9, §17
+# Không commit secret / private key / credential / production certificate / build artifact / file debug tạm
+
+# --- Secrets / credentials / TLS private material ---
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.kdbx
+.env
+.env.*
+secrets/
+secrets/**
+credentials/
+credentials/**
+private/
+private/**
+*id_rsa*
+*id_ed25519*
+
+# Production certs — chỉ cho phép example/test cert nếu explicitly thêm bằng `git add -f`
+# (mặc định ignore hết để tránh commit nhầm production credential)
+*.crt
+*.cer
+*.der
+certs/production/
+certs/production/**
+config/secrets.json
+
+# --- Build artifacts ---
+build/
+build/**
+cmake-build-*/
+out/
+dist/
+*.o
+*.a
+*.so
+*.elf
+*.bin
+*.map
+*.hex
+*.uf2
+*.dump
+
+# ESP-IDF / PlatformIO
+.managed_toolchain/
+managed_components/
+dependencies.lock
+sdkconfig.old
+sdkconfig.defaults.old
+.pio/
+.pioenvs/
+.piolibdeps/
+.pio/
+firmware/.pio/
+
+# --- Debug / temp files ---
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.vscode/ipch/
+*.code-workspace.bak
+
+# --- IDE / OS ---
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.iml
+
+# --- Python test harness (Phase 1+) ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
