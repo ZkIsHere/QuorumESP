@@ -61,7 +61,6 @@ esp_err_t quorumesp_ota_check_and_update(void) {
     const esp_app_desc_t *running;
     char server_ver[64];
     char url[192];
-    esp_http_client_config_t ota_cfg;
     esp_err_t r;
 
     if (base[0] == '\0') {
@@ -82,11 +81,17 @@ esp_err_t quorumesp_ota_check_and_update(void) {
     if (snprintf(url, sizeof(url), "%s/firmware.bin", base) >= (int)sizeof(url)) {
         return ESP_FAIL;
     }
-    memset(&ota_cfg, 0, sizeof(ota_cfg));
-    ota_cfg.url = url;
-    ota_cfg.timeout_ms = 30000;
-    ota_cfg.keep_alive_enable = true;
-    r = esp_https_ota(&ota_cfg);
+    {
+        esp_http_client_config_t http_cfg;
+        esp_https_ota_config_t ota_cfg;
+        memset(&http_cfg, 0, sizeof(http_cfg));
+        http_cfg.url = url;
+        http_cfg.timeout_ms = 30000;
+        http_cfg.keep_alive_enable = true;
+        memset(&ota_cfg, 0, sizeof(ota_cfg));
+        ota_cfg.http_config = &http_cfg;
+        r = esp_https_ota(&ota_cfg);
+    }
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "OTA download/verify failed: %s (keeping old image)",
                  esp_err_to_name(r));
