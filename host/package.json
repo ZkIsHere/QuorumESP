@@ -1,0 +1,13 @@
+{
+  "name": "quorumesp-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "QuorumESP Phase 1 host-side QDevice protocol test harness (Node.js stdlib only)",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

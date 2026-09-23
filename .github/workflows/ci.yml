@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  host-harness:
+    name: Host harness (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: |
+          for f in $(find host/src host/test -name '*.js'); do node --check "$f"; done
+        working-directory: .
+      - name: Run host protocol tests
+        run: npm test
+        working-directory: host

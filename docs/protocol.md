@@ -34,7 +34,65 @@
 | Client cert (`-c`) | `on`/`off`, default `on`. Chỉ có nghĩa khi TLS bật. |
 | TLS stack gốc | NSS (NPR/NSPR socket, `nssdb`, `certutil`). ESP32 sẽ dùng mbedTLS — `CHƯA XÁC MINH` tương đương cipher/cert. |
 | Địa chỉ listen | `qnetd -l <addr>`, `-4`/`-6` force IP version; qdevice `force_ip_version 0\|4\|6` (0 = IPv6 trước, fallback IPv4). |
-| framing I/O | `msgio_send/msgio_write/msgio_read` trên `PRFileDesc` (`msgio.h`); buffer `dynar`. **CHƯA XÁC MINH** byte layout header trên dây — chỉ biết API `msg_get_header_length()`, `msg_get_len()`, `msg_get_type()`, `msg_is_valid_msg_type()`. Cần đọc `msg.c`/`msgio.c` + bắt gói Phase 1. |
+| framing I/O | ĐÃ XÁC MINH từ source (xem §2.1): header 6 B + TLV stream; đọc theo `msgio_read` (`msgio.c`), buffer `dynar` giới hạn bởi max receive size. |
+
+### 2.1. Wire format — ĐÃ XÁC MINH từ `msg.c`, `tlv.c`, `msgio.c`
+
+Nguồn:
+
+- <https://raw.githubusercontent.com/corosync/corosync-qdevice/master/qdevices/msg.c>
+- <https://raw.githubusercontent.com/corosync/corosync-qdevice/master/qdevices/tlv.c>
+- <https://raw.githubusercontent.com/corosync/corosync-qdevice/master/qdevices/msgio.c>
+
+**Message header (6 byte, `MSG_TYPE_LENGTH=2` + `MSG_LENGTH_LENGTH=4`):**
+
+```text
+offset 0: u16 type  (big-endian, htons/ntohs)
+offset 2: u32 len   (big-endian, htonl/ntohl) = số byte TLV đứng sau header
+offset 6: TLV stream (len byte)
+```
+
+`msg_set_len()` ghi `dynar_size - 6`; `msg_get_len()` đọc u32 BE tại offset 2.
+Type hợp lệ duy nhất là 0–17 (`msg_is_valid_msg_type`).
+
+**TLV (`TLV_TYPE_LENGTH=2` + `TLV_LENGTH_LENGTH=2`):**
+
+```text
+offset 0: u16 opt_type (big-endian)
+offset 2: u16 opt_len  (big-endian) = số byte value
+offset 4: value[opt_len]
+```
+
+- Mọi multi-byte integer đều big-endian: u16 `htons`, u32 `htonl`, u64 `htobe64`.
+- u16 array: từng phần tử BE. String (`CLUSTER_NAME`): byte thô, **không** NUL terminator
+  (`tlv_add_string` dùng `strlen`).
+- `RING_ID` = u32 node_id BE + u64 seq BE = **12 B** (`memcpy` vào `tmp_buf[12]`).
+- `TIE_BREAKER` = u8 mode + u32 node_id BE = **5 B**; node_id = 0 trừ khi mode = NODE_ID.
+- `NODE_INFO` = TLV lồng nhau: `NODE_ID` bắt buộc (≠ 0, nếu không decode lỗi -4);
+  `DATA_CENTER_ID` chỉ khi ≠ 0; `NODE_STATE` chỉ khi ≠ NOT_SET.
+- `HEURISTICS_UNDEFINED` không bao giờ được encode (`tlv_add_heuristics` trả -1).
+- `ECHO_REPLY` = copy nguyên byte request rồi ghi đè type (`msg_set_type`).
+- Decoder **bỏ qua** TLV type không biết (switch không có `default` xử lý) → backward compat.
+
+**Đọc message (`msgio_read`, non-blocking):**
+
+1. Đọc đủ 6 B header trước.
+2. Khi đủ header: kiểm tra type hợp lệ, kiểm tra `6 + len ≤ dynar_max_size`
+   (max receive size đã đàm phán). Vi phạm → bật cờ `skipping_msg`, vẫn đọc tiếp
+   tới hết frame rồi báo lỗi (không lệch stream).
+3. Mã trả về: `1` đủ message / `0` đang dở / `-1` EOF / `-2` lỗi socket /
+   `-3` không lưu nổi header / `-4` không lưu nổi body / `-5` type sai /
+   `-6` message quá dài.
+
+**Giải mã (`msg_decode`):** `0` ok / `-1` sai độ dài option / `-2` hết bộ nhớ /
+`-3` TLV tràn khỏi message / `-4` nội dung option không hợp lệ
+(enum ngoài miền, `node_id == 0`, ...).
+
+**Hệ quả fail-closed cho QuorumESP:** `-1/-3/-4` khi decode, `-3..-6` khi đọc,
+type ngoài 0–17, `len` vượt max → reject/kết thúc session, không dùng nội dung.
+
+> Còn lại `CHƯA XÁC MINH` trên dây thật: thứ tự handshake bắt buộc, timeout/retry/
+> DPD thực tế, mapping NSS→mbedTLS. Để Phase 1 (harness) và Phase 4 (interop).
 
 ### Behavior quan sát được (từ source, chưa chạy thực tế)
 
@@ -157,9 +215,10 @@ Nguồn cho reconnect: Design wiki "Reconnect when connection to qnetd is lost";
 
 ## 8. Việc còn lại cho Phase 1 (bắt buộc trước ESP32)
 
-1. Đọc `tlv.c`, `msg.c`, `msgio.c`, `nss-sock.c`, `qdevice-net-socket.c`,
-   `qnetd-client-msg-received.c`, `qdevice-net-msg-received.c` từng dòng; ghi lại
-   header layout, endian, max size enforce.
+1. ~~Đọc `tlv.c`, `msg.c`, `msgio.c`... ghi lại header layout, endian, max size enforce.~~
+   HOÀN THÀNH (xem §2.1). Còn lại: `nss-sock.c`, `qdevice-net-socket.c`,
+   `qnetd-client-msg-received.c`, `qdevice-net-msg-received.c` — để Phase 1 khi cần
+   chốt thứ tự handshake trên dây thật.
 2. Dựng harness host: connect, gửi/parse từng message, malformed, TLS on/off/req,
    mất kết nối, reconnect, nhiều client, state machine.
 3. Bắt gói + log với `corosync-qdevice`/`corosync-qnetd` thật (package Debian hoặc
