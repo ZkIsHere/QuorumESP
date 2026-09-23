@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 
 #include "msg.h"
+#include "tls.h"
 
 static const char *TAG = "QDEVICE";
 static const char *PTAG = "PROTOCOL";
@@ -26,6 +27,12 @@ static uint8_t s_rx[QESP_INITIAL_MSG_SIZE];
 static uint8_t s_tx[4096];
 
 typedef enum { ST_CONNECTED, ST_PREINIT_DONE, ST_ACTIVE, ST_CLOSED } st_t;
+
+/* Transport: plaintext fd, or TLS session after STARTTLS (owns the fd). */
+typedef struct {
+    int fd;
+    qesp_tls_session_t *tls;
+} tp_t;
 
 typedef struct {
     st_t st;
@@ -38,6 +45,8 @@ typedef struct {
     uint64_t last_rs;
     int has_ring;
     int64_t last_rx_us;
+    int tls_upgraded;
+    char cluster[64];
 } sess_t;
 
 static int64_t now_us(void) {
@@ -45,9 +54,12 @@ static int64_t now_us(void) {
 }
 
 /* send exactly len bytes or fail */
-static int send_all(int fd, const uint8_t *p, size_t len) {
+static int send_all(tp_t *tp, const uint8_t *p, size_t len) {
+    if (tp->tls != NULL) {
+        return network_tls_write(tp->tls, p, len);
+    }
     while (len > 0) {
-        int n = send(fd, p, len, 0);
+        int n = send(tp->fd, p, len, 0);
         if (n <= 0) {
             return -1;
         }
@@ -78,6 +90,9 @@ static size_t init_reply(uint8_t *tx, size_t cap, const qesp_msg_t *m, uint16_t 
     return b.len;
 }
 
+/* Upgrade return code: caller must wrap the fd in TLS. */
+#define UPGRADE_REQ 2
+
 /* Handle one validated frame. Returns: >0 reply bytes, 0 no reply, -1 drop. */
 static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
                     uint8_t *tx, size_t txcap, size_t *txlen) {
@@ -92,17 +107,22 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
     s->last_rx_us = now_us();
 
     if (s->st == ST_CONNECTED) {
-        if (m.type != QESP_MSG_PREINIT || m.cluster == NULL || m.cluster_len == 0) {
+        if (m.type != QESP_MSG_PREINIT || m.cluster == NULL || m.cluster_len == 0 ||
+            m.cluster_len >= sizeof(s->cluster)) {
             ESP_LOGW(STAG, "expected PREINIT, got type=%d", m.type);
             *txlen = err_reply(tx, txcap, m.type == QESP_MSG_PREINIT ?
                                QESP_E_DOESNT_CONTAIN_REQUIRED_OPTION :
                                QESP_E_PREINIT_REQUIRED, &m);
             return *txlen > 0 ? 0 : -1;
         }
+        memcpy(s->cluster, m.cluster, m.cluster_len);
+        s->cluster[m.cluster_len] = '\0';
         {
             qesp_buf_t b;
+            uint8_t tls_mode = network_tls_available() ?
+                               QESP_TLS_SUPPORTED : QESP_TLS_UNSUPPORTED;
             qesp_buf_init(&b, tx, txcap);
-            if (qesp_msg_preinit_reply(&b, QESP_TLS_UNSUPPORTED, 0,
+            if (qesp_msg_preinit_reply(&b, tls_mode, 0,
                                        m.has_seq, m.seq) != QESP_OK) {
                 return -1;
             }
@@ -115,9 +135,14 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
 
     if (s->st == ST_PREINIT_DONE) {
         if (m.type == QESP_MSG_STARTTLS) {
-            ESP_LOGW(STAG, "STARTTLS rejected (TLS not in dev build)");
-            *txlen = err_reply(tx, txcap, QESP_E_UNSUPPORTED_MESSAGE, &m);
-            return *txlen > 0 ? 0 : -1;
+            if (!network_tls_available()) {
+                ESP_LOGW(STAG, "STARTTLS rejected (no certs in build)");
+                *txlen = err_reply(tx, txcap, QESP_E_UNSUPPORTED_MESSAGE, &m);
+                return *txlen > 0 ? 0 : -1;
+            }
+            /* Silent upgrade: the caller wraps the fd, then INIT arrives
+             * inside TLS (reference: no STARTTLS reply exists). */
+            return UPGRADE_REQ;
         }
         if (m.type != QESP_MSG_INIT) {
             *txlen = err_reply(tx, txcap, QESP_E_INIT_REQUIRED, &m);
@@ -235,54 +260,73 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
     }
 }
 
-/* Read exactly one frame (header first, then body). 0 ok, -1 drop/timeout-eof.
- * NOTE: the header is validated for type/size ONLY here. qesp_msg_check()
- * must not be used on a header-only buffer — it also demands the body and
- * would wrongly report TRUNC for every non-empty message. */
-static int recv_frame(int fd, uint8_t *rx, size_t cap, size_t *flen) {
-    uint16_t type;
-    uint32_t plen;
-    size_t got = 0;
-    while (got < QESP_MSG_HEADER_LEN) {
-        int n = recv(fd, rx + got, QESP_MSG_HEADER_LEN - got, 0);
+/* Read exactly len bytes over either transport, or fail. */
+static int tp_recv(tp_t *tp, uint8_t *p, size_t len) {
+    if (tp->tls != NULL) {
+        return network_tls_read(tp->tls, p, len);
+    }
+    while (len > 0) {
+        int n = recv(tp->fd, p, len, 0);
         if (n == 0) {
             return -1; /* peer closed */
         }
         if (n < 0) {
             return -1; /* timeout (EAGAIN) or error: caller decides */
         }
-        got += (size_t)n;
+        p += n;
+        len -= (size_t)n;
     }
-    type = 0;
-    plen = 0;
+    return 0;
+}
+
+/* Read exactly one frame (header first, then body). 0 ok, -1 drop/timeout-eof.
+ * NOTE: the header is validated for type/size ONLY here. qesp_msg_check()
+ * must not be used on a header-only buffer — it also demands the body and
+ * would wrongly report TRUNC for every non-empty message. */
+static int recv_frame(tp_t *tp, uint8_t *rx, size_t cap, size_t *flen) {
+    uint16_t type;
+    uint32_t plen;
+    if (tp_recv(tp, rx, QESP_MSG_HEADER_LEN) != 0) {
+        return -1;
+    }
     if (qesp_msg_check_header(rx, cap, &type, &plen) != QESP_OK) {
         ESP_LOGW(PTAG, "bad header (type/size)");
         return -1;
     }
-    while (got < QESP_MSG_HEADER_LEN + plen) {
-        int n = recv(fd, rx + got, QESP_MSG_HEADER_LEN + plen - got, 0);
-        if (n <= 0) {
-            return -1;
-        }
-        got += (size_t)n;
+    if (tp_recv(tp, rx + QESP_MSG_HEADER_LEN, plen) != 0) {
+        return -1;
     }
     *flen = QESP_MSG_HEADER_LEN + plen;
     return 0;
 }
 
+static void tp_close(tp_t *tp) {
+    if (tp->tls != NULL) {
+        network_tls_close(tp->tls); /* also closes the fd */
+        tp->tls = NULL;
+        tp->fd = -1;
+    } else if (tp->fd >= 0) {
+        close(tp->fd);
+        tp->fd = -1;
+    }
+}
+
 static void serve_client(int fd) {
     sess_t s;
+    tp_t tp;
     struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
     memset(&s, 0, sizeof(s));
     s.st = ST_CONNECTED;
     s.last_rx_us = now_us();
+    tp.fd = fd;
+    tp.tls = NULL;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     ESP_LOGI(TAG, "client session start");
     for (;;) {
         size_t flen = 0;
         size_t txlen = 0;
         int r;
-        if (recv_frame(fd, s_rx, sizeof(s_rx), &flen) != 0) {
+        if (recv_frame(&tp, s_rx, sizeof(s_rx), &flen) != 0) {
             /* Timeout: dead-peer check before giving up (DPD-style). */
             if (s.st == ST_ACTIVE && s.hb_ms > 0 &&
                 now_us() - s.last_rx_us > (int64_t)s.hb_ms * 1500) {
@@ -295,14 +339,26 @@ static void serve_client(int fd) {
             break; /* handshake must be prompt */
         }
         r = on_frame(&s, s_rx, flen, s_tx, sizeof(s_tx), &txlen);
+        if (r == UPGRADE_REQ) {
+            /* Round 2a: server-only TLS (no client cert yet). */
+            tp.tls = network_tls_upgrade(tp.fd, NULL, 0);
+            if (tp.tls == NULL) {
+                ESP_LOGW(TAG, "TLS upgrade failed, closing");
+                break;
+            }
+            s.tls_upgraded = 1;
+            ESP_LOGI(STAG, "transport upgraded to TLS, waiting for INIT");
+            continue;
+        }
         if (r < 0) {
             break;
         }
-        if (r == 0 && txlen > 0 && send_all(fd, s_tx, txlen) != 0) {
+        if (r == 0 && txlen > 0 && send_all(&tp, s_tx, txlen) != 0) {
             break;
         }
     }
     ESP_LOGI(TAG, "client session end");
+    tp_close(&tp);
 }
 
 static void server_task(void *arg) {
@@ -342,8 +398,7 @@ static void server_task(void *arg) {
             ip.addr = peer.sin_addr.s_addr;
             ESP_LOGI(TAG, "client " IPSTR, IP2STR(&ip));
         }
-        serve_client(cfd);
-        close(cfd);
+        serve_client(cfd); /* transport (fd or TLS) closed inside */
     }
 }
 
