@@ -1,113 +1,49 @@
-/* TLS server via raw mbedTLS. See tls.h + docs/tls.md. */
+/* TLS server via public esp-tls API (version-proof across IDF/mbedTLS majors).
+ * See tls.h + docs/tls.md.
+ *
+ * Round 2a: server cert only, no client auth (cacert_buf left NULL).
+ * Round 2b (TODO): client-cert verify + CN check via esp_tls_get_ssl_context
+ * + mbedtls_ssl_set_verify on the underlying context.
+ *
+ * FD ownership: esp_tls_server_session_delete() owns the socket (same usage
+ * as production esp_https_server) — never close() it separately.
+ */
 #include "tls.h"
 
+#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "mbedtls/asn1.h"
-#include "mbedtls/ctr_drbg.h"
-#include "mbedtls/entropy.h"
-#include "mbedtls/error.h"
-#include "mbedtls/net_sockets.h"
-#include "mbedtls/pk.h"
-#include "mbedtls/ssl.h"
-#include "mbedtls/x509_crt.h"
+#include "esp_tls.h"
 
 static const char *TAG = "TLS";
 
 #ifdef HAS_DEV_CERTS
-extern const char qesp_dev_ca_crt[];
+extern const char qesp_dev_ca_crt[]; /* reserved for round 2b */
 extern const char qesp_dev_server_crt[];
 extern const char qesp_dev_server_key[];
 #endif
 
 struct qesp_tls_session {
-    mbedtls_ssl_context ssl;
-    mbedtls_net_context net;
-    char cn[64];
+    esp_tls_t *tls;
 };
 
-static mbedtls_entropy_context s_entropy;
-static mbedtls_ctr_drbg_context s_drbg;
-static mbedtls_x509_crt s_ca;
-static mbedtls_x509_crt s_server_crt;
-static mbedtls_pk_context s_server_key;
-static mbedtls_ssl_config s_conf_plain; /* 2a: no client auth */
-static mbedtls_ssl_config s_conf_mutual; /* 2b: VERIFY_REQUIRED + ca chain */
+static esp_tls_cfg_server_t s_cfg;
 static int s_inited = 0;
 static int s_available = 0;
 
-static void log_mbedtls(int rc, const char *what) {
-    char eb[96];
-    mbedtls_strerror(rc, eb, sizeof(eb));
-    ESP_LOGW(TAG, "%s failed: -0x%04x %s", what, (unsigned)-rc, eb);
-}
-
 esp_err_t network_tls_init(void) {
-    int rc;
     if (s_inited) {
         return s_available ? ESP_OK : ESP_ERR_NOT_FOUND;
     }
     s_inited = 1;
 #ifdef HAS_DEV_CERTS
-    mbedtls_entropy_init(&s_entropy);
-    mbedtls_ctr_drbg_init(&s_drbg);
-    mbedtls_x509_crt_init(&s_ca);
-    mbedtls_x509_crt_init(&s_server_crt);
-    mbedtls_pk_init(&s_server_key);
-    mbedtls_ssl_config_init(&s_conf_plain);
-    mbedtls_ssl_config_init(&s_conf_mutual);
-
-    rc = mbedtls_ctr_drbg_seed(&s_drbg, mbedtls_entropy_func, &s_entropy,
-                               (const unsigned char *)"quorumesp", 9);
-    if (rc != 0) {
-        log_mbedtls(rc, "drbg_seed");
-        return ESP_FAIL;
-    }
-    rc = mbedtls_x509_crt_parse(&s_ca, (const unsigned char *)qesp_dev_ca_crt,
-                                strlen(qesp_dev_ca_crt) + 1);
-    if (rc != 0) {
-        log_mbedtls(rc, "ca parse");
-        return ESP_FAIL;
-    }
-    rc = mbedtls_x509_crt_parse(&s_server_crt,
-                                (const unsigned char *)qesp_dev_server_crt,
-                                strlen(qesp_dev_server_crt) + 1);
-    if (rc != 0) {
-        log_mbedtls(rc, "server cert parse");
-        return ESP_FAIL;
-    }
-    rc = mbedtls_pk_parse_key(&s_server_key,
-                              (const unsigned char *)qesp_dev_server_key,
-                              strlen(qesp_dev_server_key) + 1, NULL, 0, NULL, NULL);
-    if (rc != 0) {
-        log_mbedtls(rc, "server key parse");
-        return ESP_FAIL;
-    }
-    rc = mbedtls_ssl_config_defaults(&s_conf_plain, MBEDTLS_SSL_IS_SERVER,
-                                     MBEDTLS_SSL_TRANSPORT_STREAM,
-                                     MBEDTLS_SSL_PRESET_DEFAULT);
-    if (rc != 0) {
-        log_mbedtls(rc, "conf plain defaults");
-        return ESP_FAIL;
-    }
-    mbedtls_ssl_conf_min_version(&s_conf_plain, MBEDTLS_SSL_MAJOR_VERSION_3,
-                                 MBEDTLS_SSL_MINOR_VERSION_3);
-    mbedtls_ssl_conf_authmode(&s_conf_plain, MBEDTLS_SSL_VERIFY_NONE);
-    mbedtls_ssl_conf_rng(&s_conf_plain, mbedtls_ctr_drbg_random, &s_drbg);
-    /* mbedtls_ssl_conf_own_cert() is deprecated in favor of ..._own_cert(); both exist. */
-    rc = mbedtls_ssl_conf_own_cert(&s_conf_plain, &s_server_crt, &s_server_key);
-    if (rc != 0) {
-        log_mbedtls(rc, "conf own cert");
-        return ESP_FAIL;
-    }
-    /* Mutual-auth config shares everything, adds chain + REQUIRED. */
-    s_conf_mutual = s_conf_plain;
-    mbedtls_ssl_conf_authmode(&s_conf_mutual, MBEDTLS_SSL_VERIFY_REQUIRED);
-    mbedtls_ssl_conf_ca_chain(&s_conf_mutual, &s_ca, NULL);
-
+    memset(&s_cfg, 0, sizeof(s_cfg));
+    s_cfg.servercert_buf = (const unsigned char *)qesp_dev_server_crt;
+    s_cfg.servercert_bytes = (unsigned int)strlen(qesp_dev_server_crt) + 1;
+    s_cfg.serverkey_buf = (const unsigned char *)qesp_dev_server_key;
+    s_cfg.serverkey_bytes = (unsigned int)strlen(qesp_dev_server_key) + 1;
+    /* No cacert_buf in 2a: the server does not request client certificates. */
     s_available = 1;
     ESP_LOGI(TAG, "TLS ready (dev certs embedded)");
     return ESP_OK;
@@ -121,77 +57,37 @@ int network_tls_available(void) {
     return s_inited && s_available;
 }
 
-/* Verify callback for round 2b: chain must be clean and leaf CN must equal
- * the cluster_name from PREINIT (mirrors CERT_VerifyCertName). */
-static int verify_cn(void *data, mbedtls_x509_crt *crt, int depth, uint32_t *flags) {
-    const char *exp = (const char *)data;
-    const mbedtls_asn1_named_data *cn;
-    if (*flags != 0) {
-        return 1;
-    }
-    if (depth == 0 && exp != NULL) {
-        cn = mbedtls_asn1_find_named_data(&crt->subject, "CN", 2);
-        if (cn == NULL || cn->val.len != strlen(exp) ||
-            memcmp(cn->val.p, exp, cn->val.len) != 0) {
-            ESP_LOGW(TAG, "client CN mismatch");
-            return 1;
-        }
-    }
-    return 0;
-}
-
 qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
                                         int require_client_cert) {
     qesp_tls_session_t *s;
-    int rc;
+    esp_tls_t *tls;
+    (void)expected_cn;
     if (!network_tls_available()) {
         return NULL;
     }
-    s = (qesp_tls_session_t *)heap_caps_malloc(sizeof(*s), MALLOC_CAP_8BIT);
-    if (s == NULL) {
+    if (require_client_cert) {
+        /* Round 2b: not implemented yet — refuse instead of downgrading. */
+        ESP_LOGW(TAG, "mutual auth requested but not implemented (round 2b)");
         return NULL;
     }
-    memset(s, 0, sizeof(*s));
-    if (require_client_cert) {
-        size_t n;
-        if (expected_cn == NULL) {
-            goto fail;
-        }
-        n = strlen(expected_cn);
-        if (n == 0 || n >= sizeof(s->cn)) {
-            goto fail;
-        }
-        memcpy(s->cn, expected_cn, n + 1);
+    tls = esp_tls_init();
+    if (tls == NULL) {
+        return NULL;
     }
-    mbedtls_ssl_init(&s->ssl);
-    mbedtls_net_init(&s->net);
-    s->net.fd = fd; /* wrap the accepted socket; we keep owning it */
-    rc = mbedtls_ssl_setup(&s->ssl,
-                           require_client_cert ? &s_conf_mutual : &s_conf_plain);
-    if (rc != 0) {
-        log_mbedtls(rc, "ssl_setup");
-        goto fail_ssl;
+    /* Blocking handshake with esp-tls default server timeout. */
+    if (esp_tls_server_session_create(&s_cfg, fd, tls) != 0) {
+        ESP_LOGW(TAG, "TLS handshake failed, closing");
+        esp_tls_server_session_delete(tls); /* owns fd, like esp_https_server */
+        return NULL;
     }
-    if (require_client_cert) {
-        mbedtls_ssl_set_verify(&s->ssl, verify_cn, s->cn);
+    s = (qesp_tls_session_t *)malloc(sizeof(*s));
+    if (s == NULL) {
+        esp_tls_server_session_delete(tls);
+        return NULL;
     }
-    mbedtls_ssl_set_bio(&s->ssl, &s->net,
-                        mbedtls_net_send, mbedtls_net_recv, NULL);
-    while ((rc = mbedtls_ssl_handshake(&s->ssl)) != 0) {
-        if (rc != MBEDTLS_ERR_SSL_WANT_READ && rc != MBEDTLS_ERR_SSL_WANT_WRITE) {
-            log_mbedtls(rc, "handshake");
-            goto fail_ssl;
-        }
-    }
-    ESP_LOGI(TAG, "TLS handshake done (%s)",
-             require_client_cert ? "mutual" : "server-only");
+    s->tls = tls;
+    ESP_LOGI(TAG, "TLS handshake done (server-only auth)");
     return s;
-
-fail_ssl:
-    mbedtls_ssl_free(&s->ssl);
-fail:
-    heap_caps_free(s);
-    return NULL;
 }
 
 int network_tls_read(qesp_tls_session_t *s, uint8_t *buf, size_t len) {
@@ -200,15 +96,12 @@ int network_tls_read(qesp_tls_session_t *s, uint8_t *buf, size_t len) {
         return -1;
     }
     while (got < len) {
-        int r = mbedtls_ssl_read(&s->ssl, buf + got, len - got);
-        if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        ssize_t r = esp_tls_conn_read(s->tls, (char *)buf + got, len - got);
+        if (r == ESP_TLS_ERR_SSL_WANT_READ || r == ESP_TLS_ERR_SSL_WANT_WRITE) {
             continue;
         }
         if (r <= 0) {
-            if (r != 0) {
-                log_mbedtls(r, "ssl_read");
-            }
-            return -1;
+            return -1; /* 0 = closed, <0 = error */
         }
         got += (size_t)r;
     }
@@ -221,12 +114,11 @@ int network_tls_write(qesp_tls_session_t *s, const uint8_t *buf, size_t len) {
         return -1;
     }
     while (sent < len) {
-        int r = mbedtls_ssl_write(&s->ssl, buf + sent, len - sent);
-        if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        ssize_t r = esp_tls_conn_write(s->tls, (const char *)buf + sent, len - sent);
+        if (r == ESP_TLS_ERR_SSL_WANT_READ || r == ESP_TLS_ERR_SSL_WANT_WRITE) {
             continue;
         }
         if (r <= 0) {
-            log_mbedtls(r, "ssl_write");
             return -1;
         }
         sent += (size_t)r;
@@ -235,16 +127,10 @@ int network_tls_write(qesp_tls_session_t *s, const uint8_t *buf, size_t len) {
 }
 
 void network_tls_close(qesp_tls_session_t *s) {
-    int fd;
     if (s == NULL) {
         return;
     }
-    fd = s->net.fd;
-    mbedtls_ssl_close_notify(&s->ssl);
-    mbedtls_ssl_free(&s->ssl);
-    /* NOTE: no mbedtls_net_free() — it would close(fd); we own the fd. */
-    heap_caps_free(s);
-    if (fd >= 0) {
-        close(fd);
-    }
+    /* Owns the fd (see file header) — no separate close(). */
+    esp_tls_server_session_delete(s->tls);
+    free(s);
 }
