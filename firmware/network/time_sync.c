@@ -10,12 +10,22 @@
 
 static const char *TAG = "NETWORK";
 
+static esp_err_t wait_sync(const char *label) {
+    int i;
+    for (i = 0; i < 30; i++) {
+        if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(500)) == ESP_OK) {
+            ESP_LOGI(TAG, "time synced via %s", label);
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
 esp_err_t network_time_sync(void) {
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     time_t now = 0;
     struct tm tm;
     char buf[32];
-    int i;
 
     if (esp_netif_sntp_init(&cfg) != ESP_OK) {
         ESP_LOGE(TAG, "sntp init failed");
@@ -25,9 +35,12 @@ esp_err_t network_time_sync(void) {
         ESP_LOGE(TAG, "sntp start failed");
         return ESP_FAIL;
     }
-    for (i = 0; i < 30; i++) {
-        if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(500)) == ESP_OK) {
-            break;
+    if (wait_sync("pool.ntp.org") != ESP_OK) {
+        /* Fallback server: AP DNS relay is flaky on some networks. */
+        ESP_LOGW(TAG, "pool.ntp.org failed, trying time.google.com");
+        esp_netif_sntp_set_server(0, "time.google.com");
+        if (wait_sync("time.google.com") != ESP_OK) {
+            ESP_LOGE(TAG, "sntp failed on both servers");
         }
     }
     time(&now);
