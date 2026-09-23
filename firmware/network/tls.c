@@ -18,8 +18,8 @@
 
 #include "esp_log.h"
 #include "esp_tls.h"
-#ifdef MBEDTLS_DEBUG_C
-#include "mbedtls/debug.h"
+#ifdef CONFIG_MBEDTLS_DEBUG
+#include "mbedtls/esp_debug.h"
 #endif
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/pk.h"
@@ -62,19 +62,6 @@ static void log_mbedtls(int rc, const char *what) {
     mbedtls_strerror(rc, eb, sizeof(eb));
     ESP_LOGW(TAG, "%s failed: -0x%04x %s", what, (unsigned)-rc, eb);
 }
-
-#ifdef MBEDTLS_DEBUG_C
-/* Temporary handshake tracing (enable CONFIG_MBEDTLS_DEBUG in menuconfig).
- * Remove once mutual auth is proven; too verbose for production. */
-static void mb_debug(void *ctx, int level, const char *file, int line,
-                     const char *str) {
-    const char *base;
-    (void)ctx;
-    (void)level;
-    base = strrchr(file, '/');
-    ESP_LOGD(TAG, "%s:%d %s", base != NULL ? base + 1 : file, line, str);
-}
-#endif
 
 esp_err_t network_tls_init(void) {
     if (s_inited) {
@@ -138,6 +125,10 @@ esp_err_t network_tls_init(void) {
         }
         s_mutual_ok = 1;
         ESP_LOGI(TAG, "mutual TLS ready (client CA wired)");
+#ifdef CONFIG_MBEDTLS_DEBUG
+        /* Temporary: verbose handshake trace until mutual auth is proven. */
+        mbedtls_esp_enable_debug_log(&s_conf_mutual, 4);
+#endif
     }
     return ESP_OK;
     return ESP_OK;
@@ -249,10 +240,6 @@ qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
             goto fail_raw;
         }
     }
-#ifdef MBEDTLS_DEBUG_C
-    mbedtls_debug_set_threshold(3);
-    mbedtls_ssl_conf_dbg(&s_conf_mutual, mb_debug, NULL);
-#endif
     mbedtls_ssl_set_bio(&s->ssl, &s->net,
                         mbedtls_net_send, mbedtls_net_recv, NULL);
     for (;;) {
