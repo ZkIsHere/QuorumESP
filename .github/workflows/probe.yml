@@ -1,0 +1,22 @@
+name: Runner Probe (temporary)
+# One-off diagnostic for CI design. Delete after reading results.
+
+on:
+  push:
+    paths:
+      - .github/workflows/probe.yml
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Toolchain inventory
+        run: |
+          echo "=== os ==="; uname -a; cat /etc/os-release 2>/dev/null | head -3
+          echo "=== cpu/mem/disk ==="; nproc; free -h | head -2; df -h / | tail -1
+          echo "=== docker ==="; docker --version 2>&1; docker images 2>&1 | head -5
+          echo "=== node ==="; node --version 2>&1; npm --version 2>&1
+          echo "=== python ==="; python3 --version 2>&1
+          echo "=== gh ==="; gh --version 2>&1 | head -1
+          echo "=== idf ==="; ls -d /opt/esp* /opt/idf* ~/esp 2>&1; which idf.py 2>&1
+          echo "=== openssl ==="; openssl version 2>&1
