@@ -112,8 +112,7 @@ esp_err_t network_tls_init(void) {
             log_mbedtls(rc, "mutual conf defaults");
             return ESP_OK;
         }
-        mbedtls_ssl_conf_min_version(&s_conf_mutual, MBEDTLS_SSL_MAJOR_VERSION_3,
-                                     MBEDTLS_SSL_MINOR_VERSION_3);
+        mbedtls_ssl_conf_min_tls_version(&s_conf_mutual, MBEDTLS_SSL_VERSION_TLS1_2);
         mbedtls_ssl_conf_authmode(&s_conf_mutual, MBEDTLS_SSL_VERIFY_OPTIONAL);
         mbedtls_ssl_conf_ca_chain(&s_conf_mutual, &s_ca, NULL);
         rc = mbedtls_ssl_conf_own_cert(&s_conf_mutual, &s_server_crt, &s_server_key);
@@ -215,11 +214,11 @@ qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
      * it server-side, so clients never select a cert to send). */
     if (!s_mutual_ok) {
         ESP_LOGW(TAG, "mutual TLS not initialized");
-        goto fail;
+        goto fail_raw;
     }
     if (expected_cn == NULL || expected_cn[0] == '\0' ||
         strlen(expected_cn) >= sizeof(s->cn)) {
-        goto fail;
+        goto fail_raw;
     }
     memcpy(s->cn, expected_cn, strlen(expected_cn) + 1);
     s->raw = 1;
