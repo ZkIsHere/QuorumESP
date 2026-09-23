@@ -79,12 +79,15 @@ static size_t err_reply(uint8_t *tx, size_t cap, uint16_t code, const qesp_msg_t
     return b.len;
 }
 
-/* Build INIT_REPLY (also used with error codes, like the reference). */
+/* Build INIT_REPLY (also used with error codes, like the reference).
+ * Advertises ONLY what this firmware implements (FFSplit for now). */
 static size_t init_reply(uint8_t *tx, size_t cap, const qesp_msg_t *m, uint16_t code) {
+    static const uint16_t algos[] = {QESP_ALGO_FFSPLIT};
     qesp_buf_t b;
     qesp_buf_init(&b, tx, cap);
     if (qesp_msg_init_reply(&b, m->has_seq, m->seq, code,
-                            QESP_INITIAL_MSG_SIZE, QESP_INITIAL_MSG_SIZE) != QESP_OK) {
+                            QESP_INITIAL_MSG_SIZE, QESP_INITIAL_MSG_SIZE,
+                            algos, 1) != QESP_OK) {
         return 0;
     }
     return b.len;
@@ -160,8 +163,7 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
             *txlen = init_reply(tx, txcap, &m, QESP_E_DOESNT_CONTAIN_REQUIRED_OPTION);
             return *txlen > 0 ? 0 : -1;
         }
-        if (!m.has_algorithm ||
-            (m.algorithm != QESP_ALGO_FFSPLIT && m.algorithm != QESP_ALGO_LMS)) {
+        if (!m.has_algorithm || m.algorithm != QESP_ALGO_FFSPLIT) {
             *txlen = init_reply(tx, txcap, &m, QESP_E_UNSUPPORTED_DECISION_ALGORITHM);
             return *txlen > 0 ? 0 : -1;
         }

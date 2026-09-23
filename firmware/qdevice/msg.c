@@ -6,7 +6,8 @@ static const uint16_t SUP_MSGS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
                                     12, 13, 14, 15, 16, 17};
 static const uint16_t SUP_OPTS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
                                     13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23};
-static const uint16_t SUP_ALGOS[] = {QESP_ALGO_FFSPLIT, QESP_ALGO_LMS};
+/* Algorithms this server really implements (honesty: only FFSplit for now).
+ * Callers pass the list explicitly; see server.c. */
 
 static int add_seq(qesp_buf_t *b, int has_seq, uint32_t seq) {
     if (!has_seq) {
@@ -163,7 +164,8 @@ int qesp_msg_init(qesp_buf_t *b, int has_seq, uint32_t seq, uint16_t algorithm,
 }
 
 int qesp_msg_init_reply(qesp_buf_t *b, int has_seq, uint32_t seq, uint16_t error_code,
-                        uint32_t max_req, uint32_t max_rep) {
+                        uint32_t max_req, uint32_t max_rep,
+                        const uint16_t *algos, size_t nalgo) {
     BEGIN_OR_RETURN(b, QESP_MSG_INIT_REPLY);
     CALL_OR_RETURN(qesp_tlv_add_u16(b, QESP_TLV_REPLY_ERROR_CODE, error_code));
     CALL_OR_RETURN(qesp_tlv_add_u16_array(b, QESP_TLV_SUPPORTED_MESSAGES,
@@ -174,7 +176,7 @@ int qesp_msg_init_reply(qesp_buf_t *b, int has_seq, uint32_t seq, uint16_t error
     CALL_OR_RETURN(qesp_tlv_add_u32(b, QESP_TLV_SERVER_MAXIMUM_REQUEST_SIZE, max_req));
     CALL_OR_RETURN(qesp_tlv_add_u32(b, QESP_TLV_SERVER_MAXIMUM_REPLY_SIZE, max_rep));
     CALL_OR_RETURN(qesp_tlv_add_u16_array(b, QESP_TLV_SUPPORTED_DECISION_ALGORITHMS,
-                                         SUP_ALGOS, sizeof(SUP_ALGOS) / sizeof(SUP_ALGOS[0])));
+                                         algos, nalgo));
     END_OR_RETURN(b);
     return QESP_OK;
 }

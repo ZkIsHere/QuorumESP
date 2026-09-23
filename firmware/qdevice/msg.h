@@ -99,7 +99,8 @@ int qesp_msg_init(qesp_buf_t *b, int has_seq, uint32_t seq, uint16_t algorithm,
                   uint8_t tb_mode, uint32_t tb_node,
                   uint32_t ring_node, uint64_t ring_seq);
 int qesp_msg_init_reply(qesp_buf_t *b, int has_seq, uint32_t seq, uint16_t error_code,
-                        uint32_t max_req, uint32_t max_rep);
+                        uint32_t max_req, uint32_t max_rep,
+                        const uint16_t *algos, size_t nalgo);
 int qesp_msg_server_error(qesp_buf_t *b, uint16_t error_code, int has_seq, uint32_t seq);
 int qesp_msg_echo_request(qesp_buf_t *b, int has_seq, uint32_t seq);
 /* Byte copy of a validated ECHO_REQUEST with type overwritten (msg.c). */
