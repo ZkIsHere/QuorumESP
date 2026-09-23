@@ -8,6 +8,11 @@ CONFIG_IDF_TARGET="esp32"
 # WROOM-32D carries 4 MB flash (boot log confirms 4096k detected).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
+# Round 2b mutual TLS needs the OPTIONAL-request knob (see network/tls.c:
+# mbedTLS server authmode defaults to NONE, so without this the server never
+# requests a client cert; enforcement is request + post-handshake CN check).
+CONFIG_ESP_TLS_SERVER_MIN_AUTH_MODE_OPTIONAL=y
+
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # Watchdog is mandatory for a quorum appliance (AGENTS.md §11).

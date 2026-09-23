@@ -49,10 +49,18 @@ esp_err_t network_tls_init(void) {
     s_cfg.serverkey_buf = (const unsigned char *)qesp_dev_server_key;
     s_cfg.serverkey_bytes = (unsigned int)strlen(qesp_dev_server_key) + 1;
     /* No cacert_buf in 2a: the server does not request client certificates. */
-    /* Mutual config (2b): same + client CA makes client auth REQUIRED. */
+    /* Mutual config (2b): same + client CA. NOTE: mbedTLS defaults server
+     * authmode to VERIFY_NONE, so without the OPTIONAL flag below the server
+     * never even requests a cert. Enforcement = OPTIONAL request +
+     * post-handshake chain + CN check in check_peer_cn(). */
     s_cfg_mutual = s_cfg;
     s_cfg_mutual.cacert_buf = (const unsigned char *)qesp_dev_ca_crt;
     s_cfg_mutual.cacert_bytes = (unsigned int)strlen(qesp_dev_ca_crt) + 1;
+#ifdef CONFIG_ESP_TLS_SERVER_MIN_AUTH_MODE_OPTIONAL
+    s_cfg_mutual.client_cert_authmode_optional = true;
+#else
+#error "Round 2b needs CONFIG_ESP_TLS_SERVER_MIN_AUTH_MODE_OPTIONAL=y (see sdkconfig.defaults)"
+#endif
     s_available = 1;
     ESP_LOGI(TAG, "TLS ready (dev certs embedded)");
     return ESP_OK;
@@ -66,13 +74,15 @@ int network_tls_available(void) {
     return s_inited && s_available;
 }
 
-/* Leaf CN must equal the PREINIT cluster_name (reference behavior). */
+/* Leaf chain must verify clean AND CN must equal the PREINIT cluster_name
+ * (reference CERT_VerifyCertName behavior). */
 static int check_peer_cn(esp_tls_t *tls, const char *expected_cn) {
     const mbedtls_x509_crt *peer;
     char dn[128];
     const char *cn;
     size_t exp_len;
     mbedtls_ssl_context *ssl;
+    uint32_t vflags;
     if (expected_cn == NULL || expected_cn[0] == '\0') {
         return -1;
     }
@@ -83,6 +93,11 @@ static int check_peer_cn(esp_tls_t *tls, const char *expected_cn) {
     peer = mbedtls_ssl_get_peer_cert(ssl);
     if (peer == NULL) {
         ESP_LOGW(TAG, "no client certificate presented");
+        return -1;
+    }
+    vflags = mbedtls_ssl_get_verify_result(ssl);
+    if (vflags != 0) {
+        ESP_LOGW(TAG, "client chain verify failed flags=0x%lx", (unsigned long)vflags);
         return -1;
     }
     if (mbedtls_x509_dn_gets(dn, sizeof(dn), &peer->subject) <= 0) {
