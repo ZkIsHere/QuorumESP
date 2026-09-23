@@ -197,21 +197,74 @@ Enum giá trị quan trọng (nguyên văn từ `tlv.h`):
   restart (`AGENTS.md` §8, §11).
 - Không giữ vote cũ vô thời hạn sau mất kết nối.
 
-## 7. Session lifecycle (khung để Phase 1 điền, chưa chốt)
+## 7. Session lifecycle — ĐÃ XÁC MINH từ source (chưa bắt gói thật)
+
+Nguồn (đọc code, chưa chạy runtime):
+
+- Client connect + gửi: `qdevices/qdevice-net-socket.c`
+  (`non_blocking_client_socket_write_cb`, `qdevice_net_send_preinit`,
+  `qdevice_net_send_init`, `qdevice_net_socket_write_finished`)
+- Client nhận: `qdevices/qdevice-net-msg-received.c`
+  (`..._preinit_reply`, `..._check_tls_compatibility`, `..._init_reply`)
+- Server nhận: `qdevices/qnetd-client-msg-received.c`
+  (`qnetd_client_msg_received_{preinit,starttls,init}`, `..._check_tls`)
+- TLS upgrade: `qdevices/nss-sock.c`
+  (`nss_sock_start_ssl_as_server/client`, lazy handshake `force=0`)
+
+### 7.1. Thứ tự bắt buộc trên dây
 
 ```text
-TCP connect
-  → PREINIT (cluster_name)
-  → PREINIT_REPLY (tls_supported, client_cert_required)
-  → [STARTTLS nếu đàm phán TLS]        CHƯA XÁC MINH thứ tự bắt buộc
-  → INIT (algorithm, node_id, heartbeat, tie_breaker, ring_id, supported_*)
-  → INIT_REPLY (error_code, limits, supported_algorithms)
-  → SET_OPTION* / ECHO*/NODE_LIST*/ASK_FOR_VOTE*/VOTE_INFO*/HEURISTICS_CHANGE*
-  → SERVER_ERROR hoặc timeout/disconnect → invalidate + reconnect (phía qdevice)
+TCP connect (client non-blocking; thành công ở non_blocking_client_socket_write_cb)
+  → C: PREINIT(cluster_name)            luôn là message đầu tiên
+  → S: PREINIT_REPLY(tls_supported, client_cert_required)
+  → правил TLS (check_tls_compatibility):
+       dùng TLS  khi (server,client) ∈ {(SUP,SUP),(SUP,REQ),(REQ,SUP),(REQ,REQ)}
+       plaintext khi còn lại TRỪ 2 cặp incompatible:
+         server UNSUPPORTED + client REQUIRED → client từ chối kết nối
+         server REQUIRED + client UNSUPPORTED → client từ chối kết nối
+       (tương đương ma trận tls on/off/required trong man page)
+  → nếu TLS:
+       C: STARTTLS (seq tăng)  →  S: KHÔNG trả lời (không tồn tại STARTTLS_REPLY)
+       client flush xong STARTTLS → nss_sock_start_ssl_as_client (lazy handshake)
+       server nhận STARTTLS → nss_sock_start_ssl_as_server (đồng bộ, silent)
+       C: INIT ...               là message đầu tiên TRONG TLS
+  → nếu plaintext: C: INIT ngay sau PREINIT_REPLY
+  → S: INIT_REPLY(error_code, limits, algos)   LUÔN gửi, kể cả khi validation fail
+       (client check error_code==NO_ERROR + sizes + algorithms mới đi tiếp;
+        xong thì xóa connect_timer, bật echo-request timer)
+  → steady state (hướng đã xác minh, trigger chi tiết vẫn UNVERIFIED):
+       C→S ECHO_REQUEST (timer phía client) → S→C ECHO_REPLY (byte copy)
+       C→S NODE_LIST(INITIAL_CONFIG/CHANGED_CONFIG/MEMBERSHIP/QUORUM)
+         → S→C NODE_LIST_REPLY(seq, type, ring_id, vote)
+       C→S ASK_FOR_VOTE → S→C ASK_FOR_VOTE_REPLY(seq, ring_id, vote)
+       S→C VOTE_INFO → C→S VOTE_INFO_REPLY (client cập nhật cast-vote timer)
+       C→S HEURISTICS_CHANGE → S→C HEURISTICS_CHANGE_REPLY
+       hai chiều SET_OPTION ↔ SET_OPTION_REPLY
 ```
 
-Nguồn cho reconnect: Design wiki "Reconnect when connection to qnetd is lost";
-`qdevice-net-algorithm.h: disconnected(..., *try_reconnect, *vote)`.
+### 7.2. Chính sách lỗi phía server (đã căn harness theo)
+
+- Sai thứ tự/thiếu field/enum lạ/decode fail → **trả error reply, GIỮ kết nối**,
+  session không tiến (không vote). Mã đã thấy trong code:
+  `PREINIT_REQUIRED`, `INIT_REQUIRED`, `TLS_REQUIRED`, `UNEXPECTED_MESSAGE`,
+  `ERROR_DECODING_MSG`, `DOESNT_CONTAIN_REQUIRED_OPTION`,
+  `INVALID_HEARTBEAT_INTERVAL`, `UNSUPPORTED_DECISION_ALGORITHM`,
+  `TIE_BREAKER/ALGORITHM_DIFFERS_FROM_OTHER_NODES`, `DUPLICATE_NODE_ID`,
+  `INTERNAL_ERROR`, `UNSUPPORTED_MESSAGE`.
+- Ngắt cứng (`-1`, đóng socket) chỉ khi: verify client cert fail
+  (`CERT_VerifyCertName` vs cluster_name), lỗi alloc, lỗi transport.
+- Framing (type ngoài 0–17, vượt max size) bị loại trước khi vào session.
+- Fail-closed của QuorumESP = không vote khi handshake chưa sạch, đúng như trên.
+
+### 7.3. Còn UNVERIFIED (cần interop `docs/interop.md` + đọc tiếp)
+
+- Reconnect backoff phía client (không nằm trong 3 file đã đọc, nghi ở
+  `qdevice-net-instance.c`).
+- Trigger gửi từng `NODE_LIST` type phía client (nghi ở
+  `qdevice-net-votequorum.c` / algorithm files).
+- Khi nào server đẩy `VOTE_INFO` vs chờ `ASK_FOR_VOTE`; đường vote vào votequorum.
+- Hành vi PREINIT trùng lặp trên cùng kết nối.
+- Giá trị số của timer (connect/echo/DPD/cast-vote) — chỉ mới thấy tên.
 
 ## 8. Việc còn lại cho Phase 1 (bắt buộc trước ESP32)
 
@@ -219,10 +272,10 @@ Nguồn cho reconnect: Design wiki "Reconnect when connection to qnetd is lost";
    HOÀN THÀNH (xem §2.1). Còn lại: `nss-sock.c`, `qdevice-net-socket.c`,
    `qnetd-client-msg-received.c`, `qdevice-net-msg-received.c` — để Phase 1 khi cần
    chốt thứ tự handshake trên dây thật.
-2. Dựng harness host: connect, gửi/parse từng message, malformed, TLS on/off/req,
-   mất kết nối, reconnect, nhiều client, state machine.
-3. Bắt gói + log với `corosync-qdevice`/`corosync-qnetd` thật (package Debian hoặc
-   build từ source) để chốt handshake và DPD/heartbeat thực tế.
+2. ~~Dựng harness host...~~ HOÀN THÀNH (`host/`, 58 test pass — xem `host/README.md`).
+   Harness đã căn error policy theo §7.2 (error reply + giữ kết nối).
+3. Bắt gói + log với `corosync-qdevice`/`corosync-qnetd` thật — ĐANG TIẾN HÀNH,
+   xem `docs/interop.md` (vòng 1 plaintext + `host/tools/fake-qnetd.js`).
 4. Xác minh mapping NSS→mbedTLS (cipher, cert CN `Qnetd Server`/`Cluster Cert`,
    password file, renew/expire flow).
 5. Mọi phát hiện cập nhật vào file này theo mẫu `Nguồn / Behavior quan sát / Implementation`.
