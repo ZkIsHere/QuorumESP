@@ -1,5 +1,10 @@
-# Release: build firmware in the official IDF container and publish a
-# GitHub Release carrying firmware.bin + version.txt for on-device OTA.
+# Release: build firmware ON THE SELF-HOSTED runner and publish a GitHub
+# Release carrying firmware.bin + version.txt for on-device OTA.
+#
+# The runner has no IDF preinstalled: esp-idf v6.1 + tools are fetched once
+# and cached (actions/cache). First run takes ~20-30 min, later runs ~5-8.
+# Requirements on the runner (one-time, installed by this workflow via apt):
+# git wget flex bison gperf python3-venv cmake ninja ccache dfu-util libusb.
 #
 # Triggers:
 #   - tag push v*  -> build + publish release (device-installable)
@@ -21,61 +26,68 @@ on:
 permissions:
   contents: write
 
+env:
+  IDF_VERSION: v6.1
+  IDF_PATH: ${{ github.workspace }}/esp-idf
+  IDF_TOOLS_PATH: ${{ github.workspace }}/esp-tools
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+
 jobs:
   firmware:
-    runs-on: ubuntu-latest
-    container: espressif/idf:v6.1
-    defaults:
-      run:
-        shell: bash
+    runs-on: [self-hosted, Linux, X64]
     steps:
-      - name: "Clone source (no checkout action: container has no node)"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: System dependencies
         run: |
-          if [ "${GITHUB_REF_TYPE}" = tag ]; then
-            git clone --depth 1 --branch "${GITHUB_REF_NAME}" \
-              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /project
-            echo "VER=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
-          else
-            git clone --depth 1 \
-              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /project
-            echo "VER=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          apt-get update -qq
+          apt-get install -y -qq git wget flex bison gperf \
+            python3 python3-venv python3-pip cmake ninja-build ccache \
+            libffi-dev libssl-dev dfu-util libusb-1.0-0 unzip
+
+      - name: Restore ESP-IDF + tools cache
+        id: idf-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            esp-idf
+            esp-tools
+          key: idf-v6.1-${{ runner.os }}-v1
+
+      - name: Install ESP-IDF (cache miss only)
+        if: steps.idf-cache.outputs.cache-hit != 'true'
+        run: |
+          [ -d esp-idf ] || git clone --depth 1 --branch "$IDF_VERSION" \
+            https://github.com/espressif/esp-idf.git esp-idf
+          cd esp-idf
+          ./install.sh esp32
 
       - name: Build firmware
         run: |
-          cd /project/firmware
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then VER="${GITHUB_REF_NAME}"; else VER="dev-${GITHUB_SHA::7}"; fi
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          . ./esp-idf/export.sh
+          cd firmware
           idf.py -DPROJECT_VER="$VER" -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" build
+        shell: bash
 
       - name: Package artifacts
         run: |
-          cd /project/firmware
+          cd firmware
           printf '%s' "$VER" > version.txt
           cp build/QuorumESP.bin firmware.bin
           ls -la firmware.bin version.txt
           sha256sum firmware.bin
 
-      - name: Install gh (for publish only)
-        if: github.ref_type == 'tag'
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq curl gnupg
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-            | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg status=none
-          chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-            | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          apt-get update -qq
-          apt-get install -y -qq gh
-
       - name: Publish GitHub release
         if: github.ref_type == 'tag'
         run: |
-          cd /project/firmware
+          cd firmware
           gh release create "$VER" firmware.bin version.txt \
             --repo "$GITHUB_REPOSITORY" \
             --title "$VER (EXPERIMENTAL)" \
-            --notes "Experimental QuorumESP dev preview. Plain-HTTP LAN OTA is NOT in this build; device pulls these assets over HTTPS. No production TLS provisioning yet — see docs. Vote logic: FFSplit. Do not deploy to production clusters."
+            --notes "Experimental QuorumESP dev preview over HTTPS. No production TLS provisioning yet - see docs. Vote logic: FFSplit. Do not deploy to production clusters."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
