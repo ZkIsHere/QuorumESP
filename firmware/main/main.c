@@ -58,4 +58,3 @@ void app_main(void) {
              CONFIG_QUORUMESP_SERVER_PORT);
     quorumesp_ota_confirm_task_start(); /* rollback guard (docs/ota.md) */
 }
-}
