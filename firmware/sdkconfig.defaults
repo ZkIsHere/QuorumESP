@@ -13,6 +13,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # requests a client cert; enforcement is request + post-handshake CN check).
 CONFIG_ESP_TLS_SERVER_MIN_AUTH_MODE_OPTIONAL=y
 
+# X.509 expiry enforcement (default OFF in IDF!). Without this, notBefore/
+/// notAfter are IGNORED and expired certs verify clean. Requires wall-clock
+/// (see network/time_sync.c); wrong time fails closed, which is correct.
+CONFIG_MBEDTLS_HAVE_TIME_DATE=y
+
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # Watchdog is mandatory for a quorum appliance (AGENTS.md §11).
