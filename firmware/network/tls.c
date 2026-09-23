@@ -43,6 +43,7 @@ struct qesp_tls_session {
     mbedtls_ssl_context ssl;
     mbedtls_net_context net;
     char cn[64];
+    int peer_ok; /* set by mutual_verify during the handshake */
 };
 
 static esp_tls_cfg_server_t s_cfg;
@@ -142,47 +143,40 @@ int network_tls_available(void) {
     return s_inited && s_available;
 }
 
-/* Leaf chain must verify clean AND CN must equal the PREINIT cluster_name
- * (reference CERT_VerifyCertName behavior). */
-static int check_peer_cn(mbedtls_ssl_context *ssl, const char *expected_cn) {
-    const mbedtls_x509_crt *peer;
+/* Verify callback for round 2b (runs DURING the handshake while the peer
+ * cert is alive — get_peer_cert() after the fact always returns NULL because
+ * IDF disables MBEDTLS_SSL_KEEP_PEER_CERTIFICATE by default).
+ * Mirrors reference CERT_VerifyCertName: chain must be clean and leaf CN must
+ * equal the PREINIT cluster_name. Nonzero return aborts the handshake. */
+static int mutual_verify(void *data, mbedtls_x509_crt *crt, int depth,
+                         uint32_t *flags) {
+    qesp_tls_session_t *s = (qesp_tls_session_t *)data;
     char dn[128];
     const char *cn;
     size_t exp_len;
-    uint32_t vflags;
-    if (expected_cn == NULL || expected_cn[0] == '\0') {
-        return -1;
+    if (depth != 0) {
+        return 0; /* chain anchors judged via leaf flags below */
     }
-    if (ssl == NULL) {
-        return -1;
+    if (*flags != 0) {
+        ESP_LOGW(TAG, "client chain verify failed flags=0x%lx", (unsigned long)*flags);
+        return 1;
     }
-    peer = mbedtls_ssl_get_peer_cert(ssl);
-    if (peer == NULL) {
-        ESP_LOGW(TAG, "no client certificate presented");
-        return -1;
+    if (mbedtls_x509_dn_gets(dn, sizeof(dn), &crt->subject) <= 0) {
+        return 1;
     }
-    vflags = mbedtls_ssl_get_verify_result(ssl);
-    if (vflags != 0) {
-        ESP_LOGW(TAG, "client chain verify failed flags=0x%lx", (unsigned long)vflags);
-        return -1;
-    }
-    if (mbedtls_x509_dn_gets(dn, sizeof(dn), &peer->subject) <= 0) {
-        return -1;
-    }
-    /* dn_gets formats "CN=name, O=..." — match "CN=<expected>" exactly,
-     * terminated by ',' or end of string. */
     cn = strstr(dn, "CN=");
     if (cn == NULL) {
-        return -1;
+        return 1;
     }
     cn += 3;
-    exp_len = strlen(expected_cn);
-    if (strncmp(cn, expected_cn, exp_len) != 0 ||
+    exp_len = strlen(s->cn);
+    if (exp_len == 0 || strncmp(cn, s->cn, exp_len) != 0 ||
         (cn[exp_len] != ',' && cn[exp_len] != '\0')) {
-        ESP_LOGW(TAG, "client CN mismatch (dn=%s)", dn);
-        return -1;
+        ESP_LOGW(TAG, "client CN mismatch (dn=%s, want %s)", dn, s->cn);
+        return 1;
     }
-    ESP_LOGI(TAG, "client CN verified (%s)", expected_cn);
+    ESP_LOGI(TAG, "client CN verified (%s)", s->cn);
+    s->peer_ok = 1;
     return 0;
 }
 
@@ -242,6 +236,10 @@ qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
     }
     mbedtls_ssl_set_bio(&s->ssl, &s->net,
                         mbedtls_net_send, mbedtls_net_recv, NULL);
+    /* In-handshake verify (mutual_verify): get_peer_cert() is useless here
+     * because IDF disables KEEP_PEER_CERTIFICATE — the cert is gone after
+     * the handshake. */
+    mbedtls_ssl_set_verify(&s->ssl, mutual_verify, s);
     for (;;) {
         int rc = mbedtls_ssl_handshake(&s->ssl);
         if (rc == 0) {
@@ -252,7 +250,7 @@ qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
             goto fail_raw_ssl;
         }
     }
-    if (check_peer_cn(&s->ssl, s->cn) != 0) {
+    if (!s->peer_ok || mbedtls_ssl_get_verify_result(&s->ssl) != 0) {
         ESP_LOGW(TAG, "client cert rejected, closing");
         goto fail_raw_ssl;
     }
