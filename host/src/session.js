@@ -83,6 +83,13 @@ class QnetSession {
     this.nodeId = null;
     this.algorithm = null;
     this.heartbeatInterval = null;
+    // Real clients omit ring_id in INITIAL_CONFIG/QUORUM node lists
+    // (observed interop 2026-09-23, corosync 3.1.9). The reply still carries
+    // a ring, so the server falls back to the last known ring (INIT, then
+    // updated by every list that carries one). Inferred from client behavior
+    // against the reference qnetd — TODO confirm in qnetd-client-msg-received.c.
+    this.initRingId = null;
+    this.latestRingId = null;
     this.lastActivityMs = this.nowMs();
     this.tlsUpgraded = false;
     this.closedReason = null;
@@ -201,6 +208,8 @@ class QnetSession {
     this.nodeId = m.nodeId;
     this.algorithm = m.algorithm;
     this.heartbeatInterval = m.heartbeatInterval;
+    this.initRingId = { nodeId: m.ringId.nodeId, seq: m.ringId.seq };
+    this.latestRingId = this.initRingId;
     this.state = STATE.ACTIVE;
     return msg.initReply({
       seq: m.seq,
@@ -254,11 +263,18 @@ class QnetSession {
         out.writeUInt16BE(MSG.ECHO_REPLY, 0);
         return out;
       }
-      case MSG.NODE_LIST:
-        if (m.seq === undefined || m.listType === undefined || !m.ringId) {
+      case MSG.NODE_LIST: {
+        // ring_id is optional on the wire (INITIAL_CONFIG/QUORUM omit it);
+        // fall back to the last known ring for the mandatory reply field.
+        const ring = m.ringId || this.latestRingId;
+        if (m.seq === undefined || m.listType === undefined || !ring) {
           return this.serverErrorReply(REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION, m.seq);
         }
-        return msg.nodeListReply(m.seq, m.listType, m.ringId, this.fixedVote);
+        if (m.ringId) {
+          this.latestRingId = { nodeId: m.ringId.nodeId, seq: m.ringId.seq };
+        }
+        return msg.nodeListReply(m.seq, m.listType, ring, this.fixedVote);
+      }
       case MSG.ASK_FOR_VOTE:
         if (m.seq === undefined) {
           return this.serverErrorReply(REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION, m.seq);

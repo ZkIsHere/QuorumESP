@@ -227,6 +227,35 @@ describe('ACTIVE behavior', () => {
     assert.equal(msg.decodeMessage(rep).seq, 4242);
   });
 
+  it('answers ring-less INITIAL_CONFIG/QUORUM with the last known ring (real-client behavior)', () => {
+    const { s } = newSession({ fixedVote: VOTE.ACK });
+    doHandshake(s);
+    // INITIAL_CONFIG without ring → falls back to INIT ring.
+    const nl = msg.decodeMessage(
+      s.handle(
+        msg.nodeList({ seq: 10, listType: NODE_LIST_TYPE.INITIAL_CONFIG, nodes: [{ nodeId: 1 }] })
+      )
+    );
+    assert.equal(nl.type, MSG.NODE_LIST_REPLY);
+    assert.deepEqual(nl.ringId, RING);
+    // MEMBERSHIP with a new ring updates the fallback.
+    const ring2 = { nodeId: 1, seq: 99n };
+    s.handle(
+      msg.nodeList({ seq: 11, listType: NODE_LIST_TYPE.MEMBERSHIP, ringId: ring2, nodes: [{ nodeId: 1 }] })
+    );
+    const q = msg.decodeMessage(
+      s.handle(
+        msg.nodeList({
+          seq: 12,
+          listType: NODE_LIST_TYPE.QUORUM,
+          quorate: 1,
+          nodes: [{ nodeId: 1, nodeState: 1 }],
+        })
+      )
+    );
+    assert.deepEqual(q.ringId, ring2);
+  });
+
   it('answers NODE_LIST / ASK_FOR_VOTE / HEURISTICS_CHANGE with fixed test vote', () => {
     const { s } = newSession({ fixedVote: VOTE.ACK });
     doHandshake(s);

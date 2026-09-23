@@ -256,7 +256,21 @@ TCP connect (client non-blocking; thành công ở non_blocking_client_socket_wr
 - Framing (type ngoài 0–17, vượt max size) bị loại trước khi vào session.
 - Fail-closed của QuorumESP = không vote khi handshake chưa sạch, đúng như trên.
 
-### 7.3. Còn UNVERIFIED (cần interop `docs/interop.md` + đọc tiếp)
+### 7.4. Quan sát interop vòng 1 (client thật, corosync 3.1.9, 2026-09-23)
+
+- Client gửi `PREINIT` **có** seq (=1); `INIT` đầy đủ 18 msg + 24 opt,
+  heartbeat 8000; `SET_OPTION` chỉ mang `kapTb=1` (không heartbeat).
+- `NODE_LIST INITIAL_CONFIG` và `QUORUM` **không có `ring_id`**; chỉ
+  `MEMBERSHIP` có. Server phải fallback ring đã biết (INIT → list mới nhất)
+  cho field ring bắt buộc trong reply — harness đã implement theo.
+- Harness từng trả error 7 cho 2 list thiếu ring → client ngắt
+  (`Received server error 7. Disconnecting`). Sau fix, cần chạy lại để xem
+  tiếp ECHO timer + vote flow phía client.
+- Node state trong config list là `NOT_SET` (field vắng mặt), trong quorum
+  list là `MEMBER`.
+- Log thô: `host/frames.jsonl` vòng chạy tương ứng (không commit file log).
+
+### 7.5. Còn UNVERIFIED (cần interop `docs/interop.md` + đọc tiếp)
 
 - Reconnect backoff phía client (không nằm trong 3 file đã đọc, nghi ở
   `qdevice-net-instance.c`).
