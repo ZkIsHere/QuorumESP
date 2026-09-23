@@ -1,0 +1,104 @@
+/* Dev Wi-Fi STA transport. See wifi.h: NON-PRODUCTION. */
+#include "wifi.h"
+
+#include <string.h>
+
+#include "esp_event.h"
+#include "esp_log.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+
+static const char *TAG = "NETWORK";
+
+#define WIFI_GOT_IP_BIT BIT0
+#define WIFI_FAIL_BIT BIT1
+#define WIFI_MAX_RETRY 10
+
+static EventGroupHandle_t s_ev;
+static int s_retry = 0;
+static uint32_t s_ip_be = 0;
+
+static void ev_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    (void)arg;
+    (void)data;
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (s_retry < WIFI_MAX_RETRY) {
+            s_retry++;
+            ESP_LOGI(TAG, "wifi retry %d/%d", s_retry, WIFI_MAX_RETRY);
+            esp_wifi_connect();
+        } else {
+            xEventGroupSetBits(s_ev, WIFI_FAIL_BIT);
+        }
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
+        s_ip_be = ev->ip_info.ip.addr;
+        s_retry = 0;
+        xEventGroupSetBits(s_ev, WIFI_GOT_IP_BIT);
+    }
+}
+
+esp_err_t network_wifi_connect(uint32_t *out_ip_be) {
+    EventBits_t bits;
+    wifi_config_t cfg = {0};
+    size_t ssid_len;
+    size_t pass_len;
+
+    ESP_LOGW(TAG, "DEV TRANSPORT IS WI-FI (non-production, see docs/hardware.md)");
+
+    ssid_len = strlen(CONFIG_QUORUMESP_WIFI_SSID);
+    if (ssid_len == 0 || ssid_len > sizeof(cfg.sta.ssid) - 1) {
+        ESP_LOGE(TAG, "empty/bad SSID: set via idf.py menuconfig > QuorumESP dev");
+        return ESP_FAIL;
+    }
+    pass_len = strlen(CONFIG_QUORUMESP_WIFI_PASSWORD);
+    if (pass_len > sizeof(cfg.sta.password) - 1) {
+        ESP_LOGE(TAG, "password too long");
+        return ESP_FAIL;
+    }
+    memcpy(cfg.sta.ssid, CONFIG_QUORUMESP_WIFI_SSID, ssid_len);
+    memcpy(cfg.sta.password, CONFIG_QUORUMESP_WIFI_PASSWORD, pass_len);
+
+    s_ev = xEventGroupCreate();
+    if (s_ev == NULL) {
+        return ESP_FAIL;
+    }
+    if (esp_netif_init() != ESP_OK || esp_event_loop_create_default() != ESP_OK) {
+        return ESP_FAIL;
+    }
+    if (esp_netif_create_default_wifi_sta() == NULL) {
+        return ESP_FAIL;
+    }
+    {
+        wifi_init_config_t icfg = WIFI_INIT_CONFIG_DEFAULT();
+        if (esp_wifi_init(&icfg) != ESP_OK) {
+            return ESP_FAIL;
+        }
+    }
+    if (esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                            ev_handler, NULL, NULL) != ESP_OK ||
+        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                            ev_handler, NULL, NULL) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK ||
+        esp_wifi_set_config(WIFI_IF_STA, &cfg) != ESP_OK ||
+        esp_wifi_start() != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    bits = xEventGroupWaitBits(s_ev, WIFI_GOT_IP_BIT | WIFI_FAIL_BIT,
+                               pdFALSE, pdFALSE, portMAX_DELAY);
+    if ((bits & WIFI_GOT_IP_BIT) == 0) {
+        ESP_LOGE(TAG, "wifi failed after %d retries", WIFI_MAX_RETRY);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "wifi up, ip=" IPSTR, IP2STR((esp_ip4_addr_t *)&s_ip_be));
+    if (out_ip_be != NULL) {
+        *out_ip_be = s_ip_be;
+    }
+    return ESP_OK;
+}

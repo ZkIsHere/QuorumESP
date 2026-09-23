@@ -1,0 +1,15 @@
+menu "QuorumESP dev"
+
+    config QUORUMESP_WIFI_SSID
+        string "Dev Wi-Fi SSID (menuconfig only — local sdkconfig, never committed)"
+        default ""
+
+    config QUORUMESP_WIFI_PASSWORD
+        string "Dev Wi-Fi password (menuconfig only — local sdkconfig, never committed)"
+        default ""
+
+    config QUORUMESP_SERVER_PORT
+        int "qnetd-side TCP listen port"
+        default 5403
+
+endmenu

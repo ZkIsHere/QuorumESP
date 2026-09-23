@@ -35,6 +35,33 @@ firmware/
 └── diagnostics/   logging categories           (Phase 2)
 ```
 
+## Dev bring-up over Wi-Fi (NON-PRODUCTION, Ethernet skipped for now)
+
+> Wi-Fi is a dev transport only. Production needs Ethernet
+> (`docs/hardware.md`, `AGENTS.md` §5). This deviation is recorded here.
+
+```sh
+# In ESP-IDF PowerShell, from firmware/:
+idf.py set-target esp32
+idf.py menuconfig   # QuorumESP dev -> Wi-Fi SSID + password (local sdkconfig only!)
+idf.py build
+idf.py -p COM3 flash monitor
+```
+
+On boot the log prints the STA IP. Point a real `corosync-qdevice` at
+`IP:5403` with `tls: off` (same `corosync.conf` as `docs/interop.md`,
+`host:` = ESP32 IP). Expected serial output:
+
+```text
+I (xxx) BOOT: QuorumESP boot (EXPERIMENTAL, Wi-Fi dev transport)
+I (xxx) NETWORK: wifi up, ip=192.168.x.x
+I (xxx) QDEVICE: qnetd-side listening on port 5403 (TEST STUB vote=ACK)
+I (xxx) STATE: CONNECTED -> PREINIT_DONE
+I (xxx) STATE: PREINIT_DONE -> ACTIVE node=1 algo=1 hb=8000
+```
+
+Vote is a fixed-ACK stub; cluster integration verdicts come later (Phase 4).
+
 ## CI
 
 Firmware compilation in CI arrives with Phase 2 (needs an ESP-IDF
