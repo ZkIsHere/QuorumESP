@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_tls.h"
 #ifdef CONFIG_MBEDTLS_DEBUG
 #include "mbedtls/esp_debug.h"
