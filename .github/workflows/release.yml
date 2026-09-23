@@ -25,6 +25,9 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     container: espressif/idf:v6.1
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: "Clone source (no checkout action: container has no node)"
         run: |
