@@ -13,7 +13,7 @@
 const net = require('node:net');
 const { DEFAULTS } = require('./consts');
 const msg = require('./msg');
-const { QnetSession, SessionError } = require('./session');
+const { QnetSession } = require('./session');
 
 class NetError extends Error {
   constructor(message) {
@@ -178,15 +178,10 @@ function startFakeQnetd({ port = 0, host = '127.0.0.1', sessionOptions = {}, onS
         acc = acc.subarray(msg.HEADER_LEN + h.len);
         let reply = null;
         try {
+          // Protocol errors come back as SERVER_ERROR/INIT_REPLY replies;
+          // only misuse (use-after-close) throws → destroy transport.
           reply = session.handle(frame);
         } catch (err) {
-          if (err instanceof SessionError && !session.isClosed) {
-            try {
-              sock.write(session.serverErrorReply(err.errorCode));
-            } catch (_) {
-              // ignore write errors during teardown
-            }
-          }
           kill(err.message);
           return;
         }

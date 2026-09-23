@@ -115,9 +115,16 @@ class QnetSession {
   }
 
   /*
-   * Handle one complete frame. Returns a reply Buffer, null (no reply:
-   * STARTTLS ack happens at transport level / session closed).
-   * Throws SessionError on violation; caller must close the transport.
+   * Handle one complete frame. Returns a reply Buffer or null (no reply:
+   * STARTTLS ack happens at transport level / VOTE_INFO_REPLY ack).
+   *
+   * Error policy mirrors the reference server (qnetd-client-msg-received.c):
+   * message-level errors get an error reply and the connection STAYS UP in
+   * its current state — the session only advances on valid messages, so no
+   * vote is ever cast from a broken handshake (fail-closed in effect).
+   * Throws only for use-after-close / internal misuse; the transport must
+   * then be destroyed. Framing-level faults (oversize, bad type) never reach
+   * here — net.js drops those (reference: skipping_msg + disconnect paths).
    */
   handle(frame) {
     if (this.state === STATE.CLOSED) {
@@ -127,7 +134,7 @@ class QnetSession {
     try {
       m = msg.decodeMessage(frame, this.maxReceiveSize);
     } catch (err) {
-      throw new SessionError(`decode failed: ${err.message}`, REPLY_ERROR.ERROR_DECODING_MSG);
+      return this.serverErrorReply(REPLY_ERROR.ERROR_DECODING_MSG);
     }
     this.lastActivityMs = this.nowMs();
 
@@ -144,14 +151,22 @@ class QnetSession {
     }
   }
 
-  requirePreinit(m) {
-    if (m.type !== MSG.PREINIT || typeof m.clusterName !== 'string' || m.clusterName.length === 0) {
-      throw new SessionError('PREINIT with cluster_name required', REPLY_ERROR.PREINIT_REQUIRED);
+  requirePreinitReply(m) {
+    // Returns an error reply, or null when the PREINIT is acceptable.
+    if (m.type !== MSG.PREINIT) {
+      return this.serverErrorReply(REPLY_ERROR.PREINIT_REQUIRED, m.seq);
     }
+    if (typeof m.clusterName !== 'string' || m.clusterName.length === 0) {
+      return this.serverErrorReply(REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION, m.seq);
+    }
+    return null;
   }
 
   onConnected(m) {
-    this.requirePreinit(m);
+    const errReply = this.requirePreinitReply(m);
+    if (errReply) {
+      return errReply; // stay CONNECTED — reference keeps the connection up
+    }
     this.clusterName = m.clusterName;
     this.state = STATE.PREINIT_DONE;
     return msg.preinitReply(this.advertisedTls, this.clientCertRequired, m.seq);
@@ -160,24 +175,29 @@ class QnetSession {
   onPreinitDone(m) {
     if (m.type === MSG.STARTTLS) {
       if (this.tlsMode === 'off') {
-        throw new SessionError('STARTTLS when TLS disabled', REPLY_ERROR.UNSUPPORTED_MESSAGE);
+        return this.serverErrorReply(REPLY_ERROR.UNSUPPORTED_MESSAGE, m.seq);
       }
-      // No STARTTLS reply exists in the protocol; TLS handshake follows on
+      // No STARTTLS reply exists in the protocol (verified in
+      // qnetd_client_msg_received_starttls); the TLS handshake follows on
       // the transport, then the client sends INIT. Harness marks the intent.
       this.tlsUpgraded = true;
       this.state = STATE.TLS_UPGRADED;
       return null;
     }
     if (m.type !== MSG.INIT) {
-      throw new SessionError(
-        `expected INIT, got type ${m.type}`,
-        this.state === STATE.CONNECTED ? REPLY_ERROR.PREINIT_REQUIRED : REPLY_ERROR.INIT_REQUIRED
-      );
+      return this.serverErrorReply(REPLY_ERROR.INIT_REQUIRED, m.seq);
     }
     if (this.tlsMode === 'req' && !this.tlsUpgraded) {
-      throw new SessionError('TLS required but STARTTLS missing', REPLY_ERROR.TLS_REQUIRED);
+      return this.serverErrorReply(REPLY_ERROR.TLS_REQUIRED, m.seq);
     }
-    this.validateInit(m);
+    try {
+      this.validateInit(m);
+    } catch (err) {
+      // Reference always answers INIT_REPLY (with the error code), even on
+      // validation failure — the client decides what to do next.
+      const code = err instanceof SessionError ? err.errorCode : REPLY_ERROR.INTERNAL_ERROR;
+      return this.initErrorReply(m.seq, code);
+    }
     this.nodeId = m.nodeId;
     this.algorithm = m.algorithm;
     this.heartbeatInterval = m.heartbeatInterval;
@@ -185,6 +205,16 @@ class QnetSession {
     return msg.initReply({
       seq: m.seq,
       errorCode: REPLY_ERROR.NO_ERROR,
+      maxRequest: this.maxReceiveSize,
+      maxReply: this.maxSendSize,
+      algorithms: [ALGO.FFSPLIT, ALGO.LMS],
+    });
+  }
+
+  initErrorReply(seq, errorCode) {
+    return msg.initReply({
+      seq,
+      errorCode,
       maxRequest: this.maxReceiveSize,
       maxReply: this.maxSendSize,
       algorithms: [ALGO.FFSPLIT, ALGO.LMS],
@@ -226,20 +256,20 @@ class QnetSession {
       }
       case MSG.NODE_LIST:
         if (m.seq === undefined || m.listType === undefined || !m.ringId) {
-          throw new SessionError('bad NODE_LIST', REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION);
+          return this.serverErrorReply(REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION, m.seq);
         }
         return msg.nodeListReply(m.seq, m.listType, m.ringId, this.fixedVote);
       case MSG.ASK_FOR_VOTE:
         if (m.seq === undefined) {
-          throw new SessionError('bad ASK_FOR_VOTE', REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION);
+          return this.serverErrorReply(REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION, m.seq);
         }
         return msg.askForVoteReply(m.seq, { nodeId: this.nodeId, seq: 0n }, this.fixedVote);
       case MSG.HEURISTICS_CHANGE:
         if (m.seq === undefined || m.heuristics === undefined) {
-          throw new SessionError('bad HEURISTICS_CHANGE', REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION);
+          return this.serverErrorReply(REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION, m.seq);
         }
         if (![HEURISTICS.PASS, HEURISTICS.FAIL].includes(m.heuristics)) {
-          throw new SessionError('bad heuristics value', REPLY_ERROR.ERROR_DECODING_MSG);
+          return this.serverErrorReply(REPLY_ERROR.ERROR_DECODING_MSG, m.seq);
         }
         return msg.heuristicsChangeReply(
           m.seq,
@@ -265,9 +295,11 @@ class QnetSession {
       case MSG.PREINIT:
       case MSG.INIT:
       case MSG.STARTTLS:
-        throw new SessionError(`unexpected type ${m.type} in ACTIVE`, REPLY_ERROR.UNEXPECTED_MESSAGE);
       default:
-        throw new SessionError(`unsupported type ${m.type}`, REPLY_ERROR.UNSUPPORTED_MESSAGE);
+        // Client must never send these in ACTIVE (reference: UNEXPECTED_MESSAGE
+        // reply, connection stays up). Covers server-side reply types too
+        // (PREINIT_REPLY, INIT_REPLY, ... transmitted by us, never by client).
+        return this.serverErrorReply(REPLY_ERROR.UNEXPECTED_MESSAGE, m.seq);
     }
   }
 }

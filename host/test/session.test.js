@@ -48,105 +48,90 @@ describe('handshake', () => {
     assert.equal(s.nodeId, 1);
   });
 
-  it('rejects INIT before PREINIT (INIT_REQUIRED path)', () => {
+  it('answers INIT before PREINIT with PREINIT_REQUIRED and stays CONNECTED', () => {
     const { s } = newSession();
-    assert.throws(
-      () =>
-        s.handle(
-          msg.init({
-            seq: 1,
-            algorithm: ALGO.FFSPLIT,
-            nodeId: 1,
-            heartbeatInterval: 10000,
-            tieBreaker: TB,
-            ringId: RING,
-          })
-        ),
-      SessionError
+    const r = s.handle(
+      msg.init({
+        seq: 1,
+        algorithm: ALGO.FFSPLIT,
+        nodeId: 1,
+        heartbeatInterval: 10000,
+        tieBreaker: TB,
+        ringId: RING,
+      })
     );
-    assert.notEqual(s.state, STATE.ACTIVE);
+    const d = msg.decodeMessage(r);
+    assert.equal(d.type, MSG.SERVER_ERROR);
+    assert.equal(d.errorCode, REPLY_ERROR.PREINIT_REQUIRED);
+    assert.equal(s.state, STATE.CONNECTED);
+    // Recovery on the same connection still works (reference stays up).
+    doHandshake(s);
   });
 
-  it('rejects empty cluster_name', () => {
+  it('answers empty cluster_name with DOESNT_CONTAIN_REQUIRED_OPTION', () => {
     const { s } = newSession();
-    assert.throws(() => s.handle(msg.preinit('', 1)), SessionError);
+    const d = msg.decodeMessage(s.handle(msg.preinit('', 1)));
+    assert.equal(d.type, MSG.SERVER_ERROR);
+    assert.equal(d.errorCode, REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION);
+    assert.equal(s.state, STATE.CONNECTED);
   });
 
-  it('rejects second PREINIT/INIT once ACTIVE (unexpected message)', () => {
+  it('answers second PREINIT/INIT once ACTIVE with UNEXPECTED_MESSAGE', () => {
     const { s } = newSession();
     doHandshake(s);
-    assert.throws(() => s.handle(msg.preinit('c1', 9)), SessionError);
-    assert.throws(
-      () =>
+    for (const f of [
+      msg.preinit('c1', 9),
+      msg.init({
+        seq: 9,
+        algorithm: ALGO.FFSPLIT,
+        nodeId: 1,
+        heartbeatInterval: 10000,
+        tieBreaker: TB,
+        ringId: RING,
+      }),
+    ]) {
+      const d = msg.decodeMessage(s.handle(f));
+      assert.equal(d.type, MSG.SERVER_ERROR);
+      assert.equal(d.errorCode, REPLY_ERROR.UNEXPECTED_MESSAGE);
+    }
+    assert.equal(s.state, STATE.ACTIVE);
+  });
+
+  it('answers bad INIT with INIT_REPLY carrying the error code (reference behavior)', () => {
+    const cases = [
+      [{ algorithm: ALGO.TEST }, REPLY_ERROR.UNSUPPORTED_DECISION_ALGORITHM],
+      [{ heartbeatInterval: 999 }, REPLY_ERROR.INVALID_HEARTBEAT_INTERVAL],
+      [{ nodeId: 0 }, REPLY_ERROR.DOESNT_CONTAIN_REQUIRED_OPTION],
+    ];
+    for (const [override, expectedCode] of cases) {
+      const { s } = newSession();
+      s.handle(msg.preinit('c1', 1));
+      const d = msg.decodeMessage(
         s.handle(
           msg.init({
-            seq: 9,
+            seq: 2,
             algorithm: ALGO.FFSPLIT,
             nodeId: 1,
             heartbeatInterval: 10000,
             tieBreaker: TB,
             ringId: RING,
+            ...override,
           })
-        ),
-      SessionError
-    );
+        )
+      );
+      assert.equal(d.type, MSG.INIT_REPLY);
+      assert.equal(d.errorCode, expectedCode);
+      assert.equal(s.state, STATE.PREINIT_DONE);
+    }
   });
 
-  it('rejects unsupported algorithm and out-of-range heartbeat', () => {
-    const { s: s1 } = newSession();
-    s1.handle(msg.preinit('c1', 1));
-    assert.throws(
-      () =>
-        s1.handle(
-          msg.init({
-            seq: 2,
-            algorithm: ALGO.TEST,
-            nodeId: 1,
-            heartbeatInterval: 10000,
-            tieBreaker: TB,
-            ringId: RING,
-          })
-        ),
-      SessionError
-    );
-    const { s: s2 } = newSession();
-    s2.handle(msg.preinit('c1', 1));
-    assert.throws(
-      () =>
-        s2.handle(
-          msg.init({
-            seq: 2,
-            algorithm: ALGO.FFSPLIT,
-            nodeId: 1,
-            heartbeatInterval: 999,
-            tieBreaker: TB,
-            ringId: RING,
-          })
-        ),
-      SessionError
-    );
-    const { s: s3 } = newSession();
-    s3.handle(msg.preinit('c1', 1));
-    assert.throws(
-      () =>
-        s3.handle(
-          msg.init({
-            seq: 2,
-            algorithm: ALGO.FFSPLIT,
-            nodeId: 0,
-            heartbeatInterval: 10000,
-            tieBreaker: TB,
-            ringId: RING,
-          })
-        ),
-      SessionError
-    );
-  });
-
-  it('rejects garbage bytes (decode failure, never ACTIVE)', () => {
+  it('answers garbage bytes with ERROR_DECODING_MSG and never goes ACTIVE', () => {
     const { s } = newSession();
-    assert.throws(() => s.handle(Buffer.from([0xff, 0xff, 0, 0, 0, 5, 1])), SessionError);
+    const d = msg.decodeMessage(s.handle(Buffer.from([0xff, 0xff, 0, 0, 0, 5, 1])));
+    assert.equal(d.type, MSG.SERVER_ERROR);
+    assert.equal(d.errorCode, REPLY_ERROR.ERROR_DECODING_MSG);
     assert.equal(s.isActive, false);
+    assert.equal(s.state, STATE.CONNECTED);
   });
 
   it('rejects messages after close', () => {
@@ -158,16 +143,19 @@ describe('handshake', () => {
 });
 
 describe('TLS policy matrix', () => {
-  it('server off: STARTTLS is rejected', () => {
+  it('server off: STARTTLS gets UNSUPPORTED_MESSAGE, connection stays up', () => {
     const { s } = newSession({ tlsMode: 'off' });
     s.handle(msg.preinit('c1', 1));
-    assert.throws(() => s.handle(msg.starttls(2)), SessionError);
+    const d = msg.decodeMessage(s.handle(msg.starttls(2)));
+    assert.equal(d.type, MSG.SERVER_ERROR);
+    assert.equal(d.errorCode, REPLY_ERROR.UNSUPPORTED_MESSAGE);
+    assert.equal(s.state, STATE.PREINIT_DONE);
   });
 
-  it('server req: INIT without STARTTLS fails with TLS_REQUIRED', () => {
+  it('server req: INIT without STARTTLS gets TLS_REQUIRED, then recovers', () => {
     const { s } = newSession({ tlsMode: 'req' });
     s.handle(msg.preinit('c1', 1));
-    try {
+    const d = msg.decodeMessage(
       s.handle(
         msg.init({
           seq: 2,
@@ -177,11 +165,28 @@ describe('TLS policy matrix', () => {
           tieBreaker: TB,
           ringId: RING,
         })
-      );
-      assert.fail('expected TLS_REQUIRED');
-    } catch (err) {
-      assert.equal(err.errorCode, REPLY_ERROR.TLS_REQUIRED);
-    }
+      )
+    );
+    assert.equal(d.type, MSG.SERVER_ERROR);
+    assert.equal(d.errorCode, REPLY_ERROR.TLS_REQUIRED);
+    assert.equal(s.state, STATE.PREINIT_DONE);
+    // Client does STARTTLS and retries INIT on the same connection.
+    assert.equal(s.handle(msg.starttls(3)), null);
+    const ok = msg.decodeMessage(
+      s.handle(
+        msg.init({
+          seq: 4,
+          algorithm: ALGO.FFSPLIT,
+          nodeId: 1,
+          heartbeatInterval: 10000,
+          tieBreaker: TB,
+          ringId: RING,
+        })
+      )
+    );
+    assert.equal(ok.type, MSG.INIT_REPLY);
+    assert.equal(ok.errorCode, REPLY_ERROR.NO_ERROR);
+    assert.equal(s.isActive, true);
   });
 
   it('server req: STARTTLS then INIT succeeds (transport upgrade out of band)', () => {

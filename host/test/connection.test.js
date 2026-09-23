@@ -10,6 +10,7 @@ const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   MSG,
+  REPLY_ERROR,
   ALGO,
   VOTE,
   NODE_LIST_TYPE,
@@ -85,12 +86,13 @@ describe('fake qnetd over TCP', () => {
     }
   });
 
-  it('closes fail-closed on malformed bytes (never reaches ACTIVE)', async () => {
+  it('destroys the transport on framing-level garbage (invalid type)', async () => {
     const sock = await net.connectWithTimeout('127.0.0.1', qnetd.port);
     try {
+      // Type 99 is outside 0–17: rejected before any session exists.
       await net.sendAll(sock, Buffer.from([0x00, 0x63, 0x00, 0x00, 0x00, 0x02, 0xde, 0xad]));
       const res = await net.readOneMessage(sock, { timeoutMs: 1500 });
-      assert.equal(res, null, 'server must close without replying');
+      assert.equal(res, null, 'framing violation must drop the connection with no reply');
       const sess = qnetd.sessions[qnetd.sessions.length - 1].session;
       assert.equal(sess.isActive, false);
     } finally {
@@ -98,24 +100,33 @@ describe('fake qnetd over TCP', () => {
     }
   });
 
-  it('closes on INIT-before-PREINIT and allows reconnect afterwards', async () => {
-    const bad = await net.connectWithTimeout('127.0.0.1', qnetd.port);
+  it('answers session-level violations with SERVER_ERROR and stays usable', async () => {
+    const sock = await net.connectWithTimeout('127.0.0.1', qnetd.port);
     try {
-      await net.sendAll(bad, initMsg(1));
-      const res = await net.readOneMessage(bad, { timeoutMs: 1500 });
-      // Server sends SERVER_ERROR or closes; either way the session is dead.
-      if (res) {
-        assert.equal(msg.decodeMessage(res.frame).type, MSG.SERVER_ERROR);
-      }
+      // Valid frame, wrong state: ECHO before any handshake.
+      await net.sendAll(sock, msg.echoRequest(1));
+      const res = await net.readOneMessage(sock, { timeoutMs: 1500 });
+      assert.ok(res, 'server must answer with SERVER_ERROR, not drop');
+      const d = msg.decodeMessage(res.frame);
+      assert.equal(d.type, MSG.SERVER_ERROR);
+      assert.equal(d.errorCode, REPLY_ERROR.PREINIT_REQUIRED);
+      // Same connection recovers with a valid handshake (reference stays up).
+      await handshake(sock, 'recovered-after-error');
     } finally {
-      bad.destroy();
+      sock.destroy();
     }
-    // Reconnect with a correct handshake must still work.
-    const good = await net.connectWithTimeout('127.0.0.1', qnetd.port);
+  });
+
+  it('answers INIT-before-PREINIT with error and the same connection recovers', async () => {
+    const sock = await net.connectWithTimeout('127.0.0.1', qnetd.port);
     try {
-      await handshake(good, 'reconnect-cluster');
+      await net.sendAll(sock, initMsg(1));
+      const res = await net.readOneMessage(sock, { timeoutMs: 1500 });
+      assert.ok(res, 'expected SERVER_ERROR for out-of-order INIT');
+      assert.equal(msg.decodeMessage(res.frame).type, MSG.SERVER_ERROR);
+      await handshake(sock, 'reconnect-cluster');
     } finally {
-      good.destroy();
+      sock.destroy();
     }
   });
 
