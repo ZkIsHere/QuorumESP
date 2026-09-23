@@ -266,7 +266,8 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen,
     }
 }
 
-/* Read exactly len bytes over either transport, or fail. */
+/* Read exactly len bytes over either transport.
+ * Returns 0 ok, -1 timeout/retryable, -2 dead (close now). */
 static int tp_recv(tp_t *tp, uint8_t *p, size_t len) {
     if (tp->tls != NULL) {
         return network_tls_read(tp->tls, p, len);
@@ -274,7 +275,7 @@ static int tp_recv(tp_t *tp, uint8_t *p, size_t len) {
     while (len > 0) {
         int n = recv(tp->fd, p, len, 0);
         if (n == 0) {
-            return -1; /* peer closed */
+            return -2; /* peer closed */
         }
         if (n < 0) {
             return -1; /* timeout (EAGAIN) or error: caller decides */
@@ -292,15 +293,17 @@ static int tp_recv(tp_t *tp, uint8_t *p, size_t len) {
 static int recv_frame(tp_t *tp, uint8_t *rx, size_t cap, size_t *flen) {
     uint16_t type;
     uint32_t plen;
-    if (tp_recv(tp, rx, QESP_MSG_HEADER_LEN) != 0) {
-        return -1;
+    int rc = tp_recv(tp, rx, QESP_MSG_HEADER_LEN);
+    if (rc != 0) {
+        return rc; /* -1 timeout, -2 dead */
     }
     if (qesp_msg_check_header(rx, cap, &type, &plen) != QESP_OK) {
         ESP_LOGW(PTAG, "bad header (type/size)");
-        return -1;
+        return -2; /* framing violation: never retry a broken stream */
     }
-    if (tp_recv(tp, rx + QESP_MSG_HEADER_LEN, plen) != 0) {
-        return -1;
+    rc = tp_recv(tp, rx + QESP_MSG_HEADER_LEN, plen);
+    if (rc != 0) {
+        return rc;
     }
     *flen = QESP_MSG_HEADER_LEN + plen;
     return 0;
@@ -332,7 +335,11 @@ static void serve_client(int fd) {
         size_t flen = 0;
         size_t txlen = 0;
         int r;
-        if (recv_frame(&tp, s_rx, sizeof(s_rx), &flen) != 0) {
+        int fr = recv_frame(&tp, s_rx, sizeof(s_rx), &flen);
+        if (fr == -2) {
+            break; /* dead transport or broken framing: close now */
+        }
+        if (fr != 0) {
             /* Timeout: dead-peer check before giving up (DPD-style). */
             if (s.st == ST_ACTIVE && s.hb_ms > 0 &&
                 now_us() - s.last_rx_us > (int64_t)s.hb_ms * 1500) {

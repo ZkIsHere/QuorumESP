@@ -268,34 +268,57 @@ fail_free:
     return NULL;
 }
 
-int network_tls_read(qesp_tls_session_t *s, uint8_t *buf, size_t len) {
+/* Exact read with an overall deadline so a silent peer surfaces as a
+ * timeout (-1) instead of blocking forever, and a dead one as -2.
+ * WANT_READ from SO_RCVTIMEO expiry counts toward the deadline. */
+#define TLS_IO_DEADLINE_MS 6000
+
+static int raw_read_n(mbedtls_ssl_context *ssl, uint8_t *buf, size_t len) {
     size_t got = 0;
-    if (s == NULL) {
-        return -1;
-    }
-    if (s->raw) {
-        while (got < len) {
-            int r = mbedtls_ssl_read(&s->ssl, buf + got, len - got);
-            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                continue;
-            }
-            if (r <= 0) {
-                if (r != 0) {
-                    log_mbedtls(r, "mutual ssl_read");
-                }
+    int64_t start = esp_timer_get_time();
+    while (got < len) {
+        int r = mbedtls_ssl_read(ssl, buf + got, len - got);
+        if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            if (esp_timer_get_time() - start > (int64_t)TLS_IO_DEADLINE_MS * 1000) {
                 return -1;
             }
-            got += (size_t)r;
+            continue;
         }
-        return 0;
+        if (r == 0) {
+            return -2; /* clean EOF */
+        }
+        if (r < 0) {
+            log_mbedtls(r, "mutual ssl_read");
+            return -2;
+        }
+        got += (size_t)r;
     }
+    return 0;
+}
+
+int network_tls_read(qesp_tls_session_t *s, uint8_t *buf, size_t len) {
+    size_t got = 0;
+    int64_t start;
+    if (s == NULL) {
+        return -2;
+    }
+    if (s->raw) {
+        return raw_read_n(&s->ssl, buf, len);
+    }
+    start = esp_timer_get_time();
     while (got < len) {
         ssize_t r = esp_tls_conn_read(s->tls, (char *)buf + got, len - got);
         if (r == ESP_TLS_ERR_SSL_WANT_READ || r == ESP_TLS_ERR_SSL_WANT_WRITE) {
+            if (esp_timer_get_time() - start > (int64_t)TLS_IO_DEADLINE_MS * 1000) {
+                return -1;
+            }
             continue;
         }
-        if (r <= 0) {
-            return -1; /* 0 = closed, <0 = error */
+        if (r == 0) {
+            return -2; /* clean EOF */
+        }
+        if (r < 0) {
+            return -2;
         }
         got += (size_t)r;
     }

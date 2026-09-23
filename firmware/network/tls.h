@@ -23,7 +23,8 @@ typedef struct qesp_tls_session qesp_tls_session_t;
  * On NULL the fd is already dead — do not touch it. */
 qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
                                         int require_client_cert);
-/* Blocking, exact length (loops internally). <0 on any failure. */
+/* Blocking, exact length (loops internally). Returns 0 ok, -1 timeout
+ * (caller may retry subject to DPD), -2 transport dead (close now). */
 int network_tls_read(qesp_tls_session_t *s, uint8_t *buf, size_t len);
 int network_tls_write(qesp_tls_session_t *s, const uint8_t *buf, size_t len);
 void network_tls_close(qesp_tls_session_t *s);
