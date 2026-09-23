@@ -48,6 +48,8 @@ dist/
 .managed_toolchain/
 managed_components/
 dependencies.lock
+# NOTE: sdkconfig.defaults is the committed template; generated sdkconfig is ignored.
+/firmware/sdkconfig
 sdkconfig.old
 sdkconfig.defaults.old
 .pio/

@@ -1,0 +1,14 @@
+# QuorumESP sdkconfig.defaults — template committed on purpose.
+# The generated `sdkconfig` itself is git-ignored; copy/adjust per board.
+
+# Target is classic ESP32 (has built-in Ethernet MAC). Set once:
+#   idf.py set-target esp32
+CONFIG_IDF_TARGET="esp32"
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Watchdog is mandatory for a quorum appliance (AGENTS.md §11).
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
