@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -Wall -Wextra -Werror -std=c11 -I..
+CFLAGS = -Wall -Wextra -Werror -std=c11 -I.. -I../../common
 BINS = run_tlv run_msg
 
 all: $(BINS)

@@ -8,6 +8,7 @@ cmake_minimum_required(VERSION 3.16)
 # Windows: install via the Espressif online installer, then use the
 # "ESP-IDF PowerShell" environment before running idf.py.
 set(EXTRA_COMPONENT_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/common
     ${CMAKE_CURRENT_SOURCE_DIR}/qdevice
     ${CMAKE_CURRENT_SOURCE_DIR}/quorum
     ${CMAKE_CURRENT_SOURCE_DIR}/network

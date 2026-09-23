@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -Wall -Wextra -Werror -std=c11 -I.. -I../../qdevice
+CFLAGS = -Wall -Wextra -Werror -std=c11 -I.. -I../../common
 BINS = run_ffsplit
 
 all: $(BINS)
