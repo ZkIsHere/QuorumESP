@@ -13,6 +13,9 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # requests a client cert; enforcement is request + post-handshake CN check).
 CONFIG_ESP_TLS_SERVER_MIN_AUTH_MODE_OPTIONAL=y
 
+# SNTP talks to 2 servers (see network/time_sync.c).
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
+
 # X.509 expiry enforcement (default OFF in IDF!). Without this, notBefore/
 /// notAfter are IGNORED and expired certs verify clean. Requires wall-clock
 /// (see network/time_sync.c); wrong time fails closed, which is correct.
