@@ -87,3 +87,4 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+firmware/qdevice/test/run_*
