@@ -270,7 +270,18 @@ TCP connect (client non-blocking; thành công ở non_blocking_client_socket_wr
   list là `MEMBER`.
 - Log thô: `host/frames.jsonl` vòng chạy tương ứng (không commit file log).
 
-### 7.5. Còn UNVERIFIED (cần interop `docs/interop.md` + đọc tiếp)
+### 7.5. Quan sát interop vòng 1b (sau fix ring fallback, cùng client)
+
+- `INITIAL_CONFIG` thiếu ring → reply type 11 với ring từ `INIT`. Client chấp
+  nhận, đi tiếp `MEMBERSHIP` → `QUORUM(quorate=0)` → `QUORUM(quorate=1)`.
+- Cluster 1 node chuyển inquorate→quorate ngay sau vote ACK của harness:
+  **đường vote → cast → quorum hoạt động end-to-end** với client thật.
+- `ECHO_REQUEST` xuất hiện sau ~8s = đúng `heartbeatInterval` đã đàm phán;
+  echo dùng **bộ đếm seq riêng** (bắt đầu từ 1), không chung với message seq.
+- Không còn `SERVER_ERROR` nào trong suốt phiên. Vòng 1 coi như pass ở mức
+  framing/handshake/steady-state plaintext.
+
+### 7.6. Còn UNVERIFIED (cần interop `docs/interop.md` + đọc tiếp)
 
 - Reconnect backoff phía client (không nằm trong 3 file đã đọc, nghi ở
   `qdevice-net-instance.c`).
