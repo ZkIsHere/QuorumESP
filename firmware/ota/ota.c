@@ -57,7 +57,11 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
 }
 
 esp_err_t quorumesp_ota_check_and_update(void) {
+#ifdef CONFIG_QUORUMESP_OTA_URL
     const char *base = CONFIG_QUORUMESP_OTA_URL;
+#else
+    const char *base = "";
+#endif
     const esp_app_desc_t *running;
     char server_ver[64];
     char url[192];
