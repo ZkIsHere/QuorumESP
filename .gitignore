@@ -89,3 +89,4 @@ htmlcov/
 venv/
 firmware/**/run_*
 firmware/certs_dev/
+firmware/ota-test/
