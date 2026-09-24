@@ -50,11 +50,12 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
     }
     memset(&cfg, 0, sizeof(cfg));
     cfg.url = url;
-    cfg.timeout_ms = 15000;
+    /* 3-host redirect chain with a TLS handshake each: RSA verification on
+     * ESP32 takes seconds per handshake. Generous total budget. */
+    cfg.timeout_ms = 60000;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     /* GitHub serves ~5K of response headers; the 512B default overflows
-     * ("Out of buffer", observed 2026-09-24). The signed redirect target
-     * also makes the REQUEST line ~800B, so TX needs room too. */
+     * ("Out of buffer", observed 2026-09-24). */
     cfg.buffer_size = 8192;
     cfg.buffer_size_tx = 2048;
     cli = esp_http_client_init(&cfg);
@@ -160,7 +161,8 @@ esp_err_t quorumesp_ota_check_and_update(void) {
         esp_https_ota_config_t ota_cfg;
         memset(&http_cfg, 0, sizeof(http_cfg));
         http_cfg.url = url;
-        http_cfg.timeout_ms = 30000;
+        /* ~1.5MB firmware over software TLS needs minutes, not seconds. */
+        http_cfg.timeout_ms = 300000;
         http_cfg.keep_alive_enable = true;
         http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
         http_cfg.buffer_size = 8192;
