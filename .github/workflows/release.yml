@@ -86,7 +86,7 @@ jobs:
           # demands the full toolset incl. gdb, which we skip deliberately).
           VENV=$(echo "$IDF_TOOLS_PATH"/python_env/idf*py*/bin)
           GCCBIN=$(dirname $(find "$IDF_TOOLS_PATH/tools/xtensa-esp-elf" -name xtensa-esp32-elf-gcc -print -quit))
-          export PATH="$VENV:$GCCBIN:$PATH"
+          export PATH="$VENV:$GCCBIN:$IDF_PATH/tools:$PATH"
           export IDF_PYTHON_ENV_PATH="$(dirname "$VENV")"
           xtensa-esp32-elf-gcc --version | head -1
           cd firmware
