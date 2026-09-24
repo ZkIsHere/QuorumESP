@@ -10,6 +10,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
+#include "config.h"
+
 static const char *TAG = "NETWORK";
 
 #define WIFI_GOT_IP_BIT BIT0
@@ -44,23 +46,16 @@ static void ev_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 esp_err_t network_wifi_connect(uint32_t *out_ip_be) {
     EventBits_t bits;
     wifi_config_t cfg = {0};
-    size_t ssid_len;
-    size_t pass_len;
 
     ESP_LOGW(TAG, "DEV TRANSPORT IS WI-FI (non-production, see docs/hardware.md)");
 
-    ssid_len = strlen(CONFIG_QUORUMESP_WIFI_SSID);
-    if (ssid_len == 0 || ssid_len > sizeof(cfg.sta.ssid) - 1) {
-        ESP_LOGE(TAG, "empty/bad SSID: set via idf.py menuconfig > QuorumESP dev");
+    if (quorumesp_config_get_wifi((char *)cfg.sta.ssid,
+                                  sizeof(cfg.sta.ssid),
+                                  (char *)cfg.sta.password,
+                                  sizeof(cfg.sta.password)) != ESP_OK) {
+        ESP_LOGE(TAG, "no Wi-Fi credentials: provision NVS (docs/provisioning.md) or set via menuconfig");
         return ESP_FAIL;
     }
-    pass_len = strlen(CONFIG_QUORUMESP_WIFI_PASSWORD);
-    if (pass_len > sizeof(cfg.sta.password) - 1) {
-        ESP_LOGE(TAG, "password too long");
-        return ESP_FAIL;
-    }
-    memcpy(cfg.sta.ssid, CONFIG_QUORUMESP_WIFI_SSID, ssid_len);
-    memcpy(cfg.sta.password, CONFIG_QUORUMESP_WIFI_PASSWORD, pass_len);
 
     s_ev = xEventGroupCreate();
     if (s_ev == NULL) {

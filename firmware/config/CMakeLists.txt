@@ -1,3 +1,3 @@
 idf_component_register(SRCS "config.c"
                        INCLUDE_DIRS "."
-                       REQUIRES log)
+                       REQUIRES log nvs_flash)
