@@ -58,6 +58,12 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
         esp_http_client_cleanup(cli);
         return ESP_FAIL;
     }
+    if (esp_http_client_get_status_code(cli) != 200) {
+        ESP_LOGW(TAG, "version check HTTP status %d",
+                 esp_http_client_get_status_code(cli));
+        esp_http_client_cleanup(cli);
+        return ESP_FAIL;
+    }
     got = esp_http_client_read_response(cli, out, (int)(cap - 1));
     esp_http_client_cleanup(cli);
     if (got <= 0) {
@@ -65,6 +71,25 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
     }
     out[got] = '\0';
     str_trim(out);
+    /* Sanity: a version is short alnum text. Without this, an error page
+     * body (e.g. GitHub "Not Found") would pass as a version and trigger a
+     * doomed download (observed 2026-09-24). */
+    {
+        size_t n = strlen(out);
+        size_t i;
+        if (n == 0 || n > 40) {
+            return ESP_FAIL;
+        }
+        for (i = 0; i < n; i++) {
+            char ch = out[i];
+            if (!(ch >= 'a' && ch <= 'z') && !(ch >= 'A' && ch <= 'Z') &&
+                !(ch >= '0' && ch <= '9') && ch != '.' && ch != '_' &&
+                ch != '-' && ch != '+') {
+                ESP_LOGW(TAG, "version sanity reject: '%s'", out);
+                return ESP_FAIL;
+            }
+        }
+    }
     return ESP_OK;
 }
 
