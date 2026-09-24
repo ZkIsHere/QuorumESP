@@ -37,50 +37,75 @@ static void ota_base(char *out, size_t cap) {
 }
 
 /* GET <base>/version.txt into out (NUL-terminated). GitHub = HTTPS.
- * Uses esp_http_client_perform (not manual open/fetch): only perform()
- * follows the /latest/download 302 redirects. */
+ * Follows redirects MANUALLY with a fresh client per hop: the auto-follow
+ * inside perform() delivers status 200 but an unreadable body after 2 hops
+ * (observed 2026-09-24). Max 4 hops. */
 static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
-    char url[256];
-    esp_http_client_config_t cfg;
-    esp_http_client_handle_t cli;
-    esp_err_t err;
-    int status, got;
+    char url[1024];
+    int hop;
     if (snprintf(url, sizeof(url), "%s/version.txt", base) >= (int)sizeof(url)) {
         return ESP_FAIL;
     }
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.url = url;
-    /* 3-host redirect chain with a TLS handshake each: RSA verification on
-     * ESP32 takes seconds per handshake. Generous total budget. */
-    cfg.timeout_ms = 60000;
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    /* GitHub serves ~5K of response headers; the 512B default overflows
-     * ("Out of buffer", observed 2026-09-24). */
-    cfg.buffer_size = 8192;
-    cfg.buffer_size_tx = 2048;
-    cli = esp_http_client_init(&cfg);
-    if (cli == NULL) {
-        return ESP_FAIL;
-    }
-    err = esp_http_client_perform(cli);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "version fetch failed: %s", esp_err_to_name(err));
+    for (hop = 0; hop < 5; hop++) {
+        esp_http_client_config_t cfg;
+        esp_http_client_handle_t cli;
+        int status, got;
+        char *loc_val = NULL;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.url = url;
+        /* 3-host chain with a TLS handshake each: RSA verification on
+         * ESP32 takes seconds per handshake. Generous budget per hop. */
+        cfg.timeout_ms = 60000;
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+        /* GitHub serves ~5K of response headers; the 512B default overflows
+         * ("Out of buffer", observed 2026-09-24). The signed redirect target
+         * also makes the request line long. */
+        cfg.buffer_size = 8192;
+        cfg.buffer_size_tx = 2048;
+        cfg.disable_auto_redirect = true;
+        cli = esp_http_client_init(&cfg);
+        if (cli == NULL) {
+            return ESP_FAIL;
+        }
+        if (esp_http_client_open(cli, 0) != ESP_OK ||
+            esp_http_client_fetch_headers(cli) < 0) {
+            ESP_LOGW(TAG, "version fetch failed");
+            esp_http_client_cleanup(cli);
+            return ESP_FAIL;
+        }
+        status = esp_http_client_get_status_code(cli);
+        if (status == 301 || status == 302 || status == 303 ||
+            status == 307 || status == 308) {
+            if (esp_http_client_get_header(cli, "Location", &loc_val) != ESP_OK ||
+                loc_val == NULL || loc_val[0] == '\0') {
+                ESP_LOGW(TAG, "redirect without Location");
+                esp_http_client_cleanup(cli);
+                return ESP_FAIL;
+            }
+            ESP_LOGI(TAG, "redirect hop %d", hop + 1);
+            snprintf(url, sizeof(url), "%s", loc_val);
+            esp_http_client_cleanup(cli);
+            continue;
+        }
+        if (status != 200) {
+            ESP_LOGW(TAG, "version check HTTP status %d", status);
+            esp_http_client_cleanup(cli);
+            return ESP_FAIL;
+        }
+        got = esp_http_client_read_response(cli, out, (int)(cap - 1));
         esp_http_client_cleanup(cli);
+        if (got <= 0) {
+            ESP_LOGW(TAG, "version body empty");
+            return ESP_FAIL;
+        }
+        out[got] = '\0';
+        str_trim(out);
+        break;
+    }
+    if (hop >= 5) {
+        ESP_LOGW(TAG, "too many redirects");
         return ESP_FAIL;
     }
-    status = esp_http_client_get_status_code(cli);
-    if (status != 200) {
-        ESP_LOGW(TAG, "version check HTTP status %d", status);
-        esp_http_client_cleanup(cli);
-        return ESP_FAIL;
-    }
-    got = esp_http_client_read_response(cli, out, (int)(cap - 1));
-    esp_http_client_cleanup(cli);
-    if (got <= 0) {
-        return ESP_FAIL;
-    }
-    out[got] = '\0';
-    str_trim(out);
     /* Sanity: a version is short alnum text. Without this, an error page
      * body (e.g. GitHub "Not Found") would pass as a version and trigger a
      * doomed download (observed 2026-09-24). */
