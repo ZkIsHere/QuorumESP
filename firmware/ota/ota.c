@@ -53,8 +53,10 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
     cfg.timeout_ms = 15000;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     /* GitHub serves ~5K of response headers; the 512B default overflows
-     * ("Out of buffer", observed 2026-09-24). */
+     * ("Out of buffer", observed 2026-09-24). The signed redirect target
+     * also makes the REQUEST line ~800B, so TX needs room too. */
     cfg.buffer_size = 8192;
+    cfg.buffer_size_tx = 2048;
     cli = esp_http_client_init(&cfg);
     if (cli == NULL) {
         return ESP_FAIL;
@@ -162,6 +164,7 @@ esp_err_t quorumesp_ota_check_and_update(void) {
         http_cfg.keep_alive_enable = true;
         http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
         http_cfg.buffer_size = 8192;
+        http_cfg.buffer_size_tx = 2048;
         memset(&ota_cfg, 0, sizeof(ota_cfg));
         ota_cfg.http_config = &http_cfg;
         r = esp_https_ota(&ota_cfg);
