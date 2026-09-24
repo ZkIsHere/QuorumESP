@@ -2,6 +2,7 @@
  * reboot -> health confirm (else automatic rollback). See docs/ota.md. */
 #include "ota.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_app_desc.h"
@@ -65,6 +66,37 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
     out[got] = '\0';
     str_trim(out);
     return ESP_OK;
+}
+
+/* OTA check must NOT run on the main task (3.5K stack): the TLS handshake
+ * with cert-bundle parsing needs tens of KB. Dedicated 12K task instead;
+ * main waits for it (bounded) and boots the server either way. */
+#define OTA_TASK_STACK 12288
+#define OTA_TASK_WAIT_MS 150000
+
+typedef struct {
+    TaskHandle_t main_task;
+} ota_check_arg_t;
+
+static void ota_check_task(void *arg) {
+    ota_check_arg_t *a = (ota_check_arg_t *)arg;
+    quorumesp_ota_check_and_update();
+    xTaskNotifyGive(a->main_task);
+    free(a);
+    vTaskDelete(NULL);
+}
+
+void quorumesp_ota_check_async_and_wait(void) {
+    ota_check_arg_t *a = (ota_check_arg_t *)malloc(sizeof(*a));
+    if (a == NULL) {
+        return;
+    }
+    a->main_task = xTaskGetCurrentTaskHandle();
+    if (xTaskCreate(ota_check_task, "ota_chk", OTA_TASK_STACK, a, 5, NULL) != pdPASS) {
+        free(a);
+        return;
+    }
+    xTaskNotifyWait(0, 0, NULL, pdMS_TO_TICKS(OTA_TASK_WAIT_MS));
 }
 
 esp_err_t quorumesp_ota_check_and_update(void) {

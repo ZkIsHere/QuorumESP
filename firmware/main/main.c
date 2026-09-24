@@ -45,7 +45,7 @@ void app_main(void) {
         ESP_LOGW(TAG, "no wall-clock — mutual TLS will fail-closed");
     }
 #if CONFIG_QUORUMESP_OTA_CHECK
-    quorumesp_ota_check_and_update(); /* reboots on success, else continues */
+    quorumesp_ota_check_async_and_wait(); /* reboots on success, else continues */
 #endif
     if (network_tls_init() != ESP_OK) {
         ESP_LOGW(TAG, "TLS unavailable (no dev certs) — plaintext only");
