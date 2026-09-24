@@ -36,12 +36,15 @@ static void ota_base(char *out, size_t cap) {
              CONFIG_QUORUMESP_OTA_GITHUB_REPO);
 }
 
-/* GET <base>/version.txt into out (NUL-terminated). GitHub = HTTPS. */
+/* GET <base>/version.txt into out (NUL-terminated). GitHub = HTTPS.
+ * Uses esp_http_client_perform (not manual open/fetch): only perform()
+ * follows the /latest/download 302 redirects. */
 static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
     char url[256];
     esp_http_client_config_t cfg;
     esp_http_client_handle_t cli;
-    int got;
+    esp_err_t err;
+    int status, got;
     if (snprintf(url, sizeof(url), "%s/version.txt", base) >= (int)sizeof(url)) {
         return ESP_FAIL;
     }
@@ -53,14 +56,15 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
     if (cli == NULL) {
         return ESP_FAIL;
     }
-    if (esp_http_client_open(cli, 0) != ESP_OK ||
-        esp_http_client_fetch_headers(cli) < 0) {
+    err = esp_http_client_perform(cli);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "version fetch failed: %s", esp_err_to_name(err));
         esp_http_client_cleanup(cli);
         return ESP_FAIL;
     }
-    if (esp_http_client_get_status_code(cli) != 200) {
-        ESP_LOGW(TAG, "version check HTTP status %d",
-                 esp_http_client_get_status_code(cli));
+    status = esp_http_client_get_status_code(cli);
+    if (status != 200) {
+        ESP_LOGW(TAG, "version check HTTP status %d", status);
         esp_http_client_cleanup(cli);
         return ESP_FAIL;
     }
