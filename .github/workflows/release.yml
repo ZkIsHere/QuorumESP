@@ -54,17 +54,25 @@ jobs:
           path: |
             esp-idf
             esp-tools
-          key: idf-v6.1-${{ runner.os }}-v1
+          key: idf-v6.1-min-${{ runner.os }}-v1
 
       - name: Install ESP-IDF (cache miss only)
+        timeout-minutes: 45
         if: steps.idf-cache.outputs.cache-hit != 'true'
         run: |
+          # Minimal set: full install.sh pulls GBs (incl. gdb from github
+          # releases, which stalls on this runner). Build needs only the
+          # compiler + python env; tools come from dl.espressif.com.
           [ -d esp-idf ] || git clone --depth 1 --branch "$IDF_VERSION" \
             https://github.com/espressif/esp-idf.git esp-idf
           cd esp-idf
-          ./install.sh esp32
+          python3 tools/idf_tools.py install xtensa-esp-elf
+          python3 tools/idf_tools.py install-python-env
+          . ./export.sh
+          idf.py --version
 
       - name: Build firmware
+        timeout-minutes: 45
         run: |
           if [ "${GITHUB_REF_TYPE}" = tag ]; then VER="${GITHUB_REF_NAME}"; else VER="dev-${GITHUB_SHA::7}"; fi
           echo "VER=$VER" >> "$GITHUB_ENV"
