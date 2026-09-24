@@ -41,8 +41,12 @@ jobs:
 
       - name: Resolve IDF paths
         run: |
-          echo "IDF_PATH=$HOME/esp-idf" >> "$GITHUB_ENV"
-          echo "IDF_TOOLS_PATH=$HOME/esp-tools" >> "$GITHUB_ENV"
+          # NOTE: $HOME is empty on this runner; resolve via passwd DB.
+          HD=${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}
+          [ -n "$HD" ] || { echo NO-HOME; exit 1; }
+          echo "IDF_PATH=$HD/esp-idf" >> "$GITHUB_ENV"
+          echo "IDF_TOOLS_PATH=$HD/esp-tools" >> "$GITHUB_ENV"
+          echo "resolved HD=$HD"
 
       - name: System dependencies
         run: |
@@ -53,7 +57,7 @@ jobs:
 
       - name: Verify ESP-IDF install
         run: |
-          [ -f "$HOME/esp-idf/tools/idf_tools.py" ] || {
+          [ -f "$IDF_PATH/tools/idf_tools.py" ] || {
             echo "MISSING ~/esp-idf — one-time manual install required:"
             echo "  git clone --depth 1 --branch v6.1 https://github.com/espressif/esp-idf.git ~/esp-idf"
             echo "  cd ~/esp-idf && export IDF_TOOLS_PATH=~/esp-tools"
@@ -61,11 +65,11 @@ jobs:
             echo "  python3 tools/idf_tools.py install-python-env"
             exit 1
           }
-          [ -x "$HOME/esp-tools/python_env"/idf*py*/bin/python ] || {
+          [ -x "$IDF_TOOLS_PATH/python_env"/idf*py*/bin/python ] || {
             echo "MISSING python venv under ~/esp-tools — rerun install-python-env"
             exit 1
           }
-          GCC=$(find "$HOME/esp-tools/tools/xtensa-esp-elf" \
+          GCC=$(find "$IDF_TOOLS_PATH/tools/xtensa-esp-elf" \
             -name xtensa-esp32-elf-gcc -print -quit)
           [ -n "$GCC" ] || {
             echo "MISSING toolchain under ~/esp-tools"
@@ -80,8 +84,8 @@ jobs:
           echo "VER=$VER" >> "$GITHUB_ENV"
           # Manual env: compiler + python venv on PATH (no export.sh — it
           # demands the full toolset incl. gdb, which we skip deliberately).
-          VENV=$(echo "$HOME/esp-tools"/python_env/idf*py*/bin)
-          GCCBIN=$(dirname $(find "$HOME/esp-tools/tools/xtensa-esp-elf" -name xtensa-esp32-elf-gcc -print -quit))
+          VENV=$(echo "$IDF_TOOLS_PATH"/python_env/idf*py*/bin)
+          GCCBIN=$(dirname $(find "$IDF_TOOLS_PATH/tools/xtensa-esp-elf" -name xtensa-esp32-elf-gcc -print -quit))
           export PATH="$VENV:$GCCBIN:$PATH"
           export IDF_PYTHON_ENV_PATH="$(dirname "$VENV")"
           xtensa-esp32-elf-gcc --version | head -1
