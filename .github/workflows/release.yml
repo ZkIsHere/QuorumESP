@@ -28,8 +28,6 @@ permissions:
 
 env:
   IDF_VERSION: v6.1
-  IDF_PATH: ~/esp-idf
-  IDF_TOOLS_PATH: ~/esp-tools
   ESP_IDF_VERSION: 6.1.0
   CMAKE_BUILD_PARALLEL_LEVEL: 2
 
@@ -40,6 +38,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Resolve IDF paths
+        run: |
+          echo "IDF_PATH=$HOME/esp-idf" >> "$GITHUB_ENV"
+          echo "IDF_TOOLS_PATH=$HOME/esp-tools" >> "$GITHUB_ENV"
 
       - name: System dependencies
         run: |
