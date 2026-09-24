@@ -13,17 +13,12 @@ menu "QuorumESP dev"
         default 5403
 
     config QUORUMESP_OTA_CHECK
-        bool "Check for OTA update at boot (dev: plain HTTP, see docs/ota.md)"
+        bool "Check for OTA update at boot (see docs/ota.md)"
         default n
 
-    config QUORUMESP_OTA_URL
-        string "OTA base URL (serves version.txt + firmware.bin)"
-        default ""
-        depends on QUORUMESP_OTA_CHECK
-
     config QUORUMESP_OTA_GITHUB_REPO
-        string "GitHub repo for release OTA (owner/name, empty = use OTA_URL)"
-        default ""
+        string "GitHub repo for release OTA (owner/name)"
+        default "ZkIsHere/QuorumESP"
         depends on QUORUMESP_OTA_CHECK
 
     config QUORUMESP_REQUIRE_CLIENT_CERT

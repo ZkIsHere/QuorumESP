@@ -26,30 +26,17 @@ static void str_trim(char *s) {
     }
 }
 
-/* Resolve the update source. GitHub release mode needs no JSON parsing:
+/* Update channel is hardcoded to GitHub releases (no custom URL mode):
  * .../releases/latest/download/{version.txt,firmware.bin} redirect to the
  * newest release assets (esp_http_client follows redirects). The repo must
  * be public, or provide a token (not implemented — see docs/ota.md). */
-static void ota_base(char *out, size_t cap, int *is_github) {
-#ifdef CONFIG_QUORUMESP_OTA_GITHUB_REPO
-    if (CONFIG_QUORUMESP_OTA_GITHUB_REPO[0] != '\0') {
-        snprintf(out, cap, "https://github.com/%s/releases/latest/download",
-                 CONFIG_QUORUMESP_OTA_GITHUB_REPO);
-        *is_github = 1;
-        return;
-    }
-#endif
-#ifdef CONFIG_QUORUMESP_OTA_URL
-    snprintf(out, cap, "%s", CONFIG_QUORUMESP_OTA_URL);
-#else
-    out[0] = '\0';
-#endif
-    *is_github = 0;
+static void ota_base(char *out, size_t cap) {
+    snprintf(out, cap, "https://github.com/%s/releases/latest/download",
+             CONFIG_QUORUMESP_OTA_GITHUB_REPO);
 }
 
-/* GET <base>/version.txt into out (NUL-terminated). */
-static esp_err_t fetch_version(const char *base, int is_github,
-                               char *out, size_t cap) {
+/* GET <base>/version.txt into out (NUL-terminated). GitHub = HTTPS. */
+static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
     char url[256];
     esp_http_client_config_t cfg;
     esp_http_client_handle_t cli;
@@ -60,9 +47,7 @@ static esp_err_t fetch_version(const char *base, int is_github,
     memset(&cfg, 0, sizeof(cfg));
     cfg.url = url;
     cfg.timeout_ms = 15000;
-    if (is_github) {
-        cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    }
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cli = esp_http_client_init(&cfg);
     if (cli == NULL) {
         return ESP_FAIL;
@@ -84,20 +69,15 @@ static esp_err_t fetch_version(const char *base, int is_github,
 
 esp_err_t quorumesp_ota_check_and_update(void) {
     char base[192];
-    int is_github = 0;
     const esp_app_desc_t *running;
     char server_ver[64];
     char url[256];
     esp_err_t r;
 
-    ota_base(base, sizeof(base), &is_github);
-    if (base[0] == '\0') {
-        ESP_LOGI(TAG, "OTA URL empty, skipping check");
-        return ESP_OK;
-    }
+    ota_base(base, sizeof(base));
     running = esp_app_get_description();
     ESP_LOGI(TAG, "running version %s, checking %s", running->version, base);
-    if (fetch_version(base, is_github, server_ver, sizeof(server_ver)) != ESP_OK) {
+    if (fetch_version(base, server_ver, sizeof(server_ver)) != ESP_OK) {
         ESP_LOGW(TAG, "version check failed, keeping current image");
         return ESP_FAIL;
     }
@@ -116,9 +96,7 @@ esp_err_t quorumesp_ota_check_and_update(void) {
         http_cfg.url = url;
         http_cfg.timeout_ms = 30000;
         http_cfg.keep_alive_enable = true;
-        if (is_github) {
-            http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
-        }
+        http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
         memset(&ota_cfg, 0, sizeof(ota_cfg));
         ota_cfg.http_config = &http_cfg;
         r = esp_https_ota(&ota_cfg);
