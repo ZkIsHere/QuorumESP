@@ -76,7 +76,9 @@ static esp_err_t fetch_version(const char *base, char *out, size_t cap) {
         status = esp_http_client_get_status_code(cli);
         if (status == 301 || status == 302 || status == 303 ||
             status == 307 || status == 308) {
-            if (esp_http_client_get_header(cli, "Location", &loc_val) != ESP_OK ||
+            /* NOTE: get_header() reads *request* headers; response headers
+             * need get_response_header() + SAVE_RESPONSE_HEADERS. */
+            if (esp_http_client_get_response_header(cli, "Location", &loc_val) != ESP_OK ||
                 loc_val == NULL || loc_val[0] == '\0') {
                 ESP_LOGW(TAG, "redirect without Location");
                 esp_http_client_cleanup(cli);

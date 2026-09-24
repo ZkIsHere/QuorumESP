@@ -9,6 +9,9 @@ CONFIG_IDF_TARGET="esp32"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+# OTA manual redirect following reads the Location *response* header.
+CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS=y
+
 # DEV ONLY: allow plain-HTTP OTA (LAN test server). Production must use
 # HTTPS with cert_pem (see docs/ota.md §4). Without this, esp_https_ota
 # refuses configs without server verification (fail-closed default).
