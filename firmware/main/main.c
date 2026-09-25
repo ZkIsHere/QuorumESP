@@ -13,6 +13,7 @@
 #include "server.h"
 #include "config.h"
 #include "ota.h"
+#include "watchdog.h"
 #include "time_sync.h"
 #include "tls.h"
 #include "wifi.h"
@@ -41,6 +42,7 @@ void app_main(void) {
     if (quorumesp_config_init() != ESP_OK) {
         ESP_LOGW(TAG, "config init failed, safe defaults in use");
     }
+    quorumesp_watchdog_init();
     if (network_wifi_connect(NULL) != ESP_OK) {
         ESP_LOGE(TAG, "wifi up failed — provision NVS (docs/provisioning.md)");
         return;

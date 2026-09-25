@@ -28,7 +28,7 @@
 #include "esp_log.h"
 #include "esp_netif_ip_addr.h"
 #include "esp_system.h"
-#include "esp_task_wdt.h"
+#include "watchdog.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -736,14 +736,14 @@ static void session_task(void *arg) {
     s.tp_ref = tp;
     setsockopt(tp.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(tp.fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
-    esp_task_wdt_add(NULL);
+    quorumesp_watchdog_add_current();
     ESP_LOGI(TAG, "client session start");
     for (;;) {
         size_t flen = 0;
         size_t txlen = 0;
         int r;
         int fr;
-        esp_task_wdt_reset();
+        quorumesp_watchdog_feed();
         fr = recv_frame(&tp, rx, QESP_RX_SIZE, &flen);
         if (fr == -2) {
             break; /* dead transport or broken framing: close now */
@@ -852,7 +852,7 @@ static void session_task(void *arg) {
     tp_close(&tp);
     free(rx);
     free(tx);
-    esp_task_wdt_delete(NULL);
+    quorumesp_watchdog_remove_current();
     vTaskDelete(NULL);
 }
 
@@ -882,7 +882,7 @@ static void server_task(void *arg) {
     }
     ESP_LOGI(TAG, "qnetd-side listening on port %d (FFSplit+LMS)",
              (int)quorumesp_config_get()->qdevice_port);
-    esp_task_wdt_add(NULL);
+    quorumesp_watchdog_add_current();
     for (;;) {
         struct sockaddr_in peer;
         socklen_t plen = sizeof(peer);
@@ -890,7 +890,7 @@ static void server_task(void *arg) {
         struct timeval sel_tv = {.tv_sec = 5, .tv_usec = 0};
         int *pfd;
         int cfd;
-        esp_task_wdt_reset();
+        quorumesp_watchdog_feed();
         FD_ZERO(&rfds);
         FD_SET(lfd, &rfds);
         if (select(lfd + 1, &rfds, NULL, NULL, &sel_tv) <= 0) {
