@@ -38,8 +38,8 @@ cd $env:TEMP
 @"
 key,type,encoding,value
 qesp,namespace,,
-ssid,data,string,<YOUR-SSID>
-pass,data,string,<YOUR-PASSWORD>
+wssid,data,string,<YOUR-SSID>
+wpass,data,string,<YOUR-PASSWORD>
 "@ | Out-File -Encoding ascii wifi.csv
 python $env:IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py generate wifi.csv nvs-wifi.bin 0x6000
 python -m esptool --chip esp32 -p COM3 write_flash 0x9000 nvs-wifi.bin
