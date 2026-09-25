@@ -99,6 +99,11 @@ static uint8_t s_lms_last[QESP_FF_MAX_CLIENTS]; /* saved LMS votes */
 static tp_t s_tp[QESP_FF_MAX_CLIENTS];
 static int s_phase; /* 0 idle, 1 sending nacks, 2 sending acks */
 static int s_nsessions;
+/* Own socket accounting: LWIP gives no enumeration API. Incremented on
+ * every accepted fd, decremented wherever that fd is closed. If accept
+ * later fails ENFILE while this stays low, the leak is outside qdevice. */
+static int s_nsocks;
+static portMUX_TYPE s_sock_spin = portMUX_INITIALIZER_UNLOCKED;
 
 static int64_t now_us(void) {
     return esp_timer_get_time();
@@ -111,6 +116,20 @@ static int64_t now_us(void) {
 static void tune_servant_socket(int fd) {
     struct linger lg = {.l_onoff = 1, .l_linger = 0};
     setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+}
+
+static void sock_opened(void) {
+    portENTER_CRITICAL(&s_sock_spin);
+    s_nsocks++;
+    portEXIT_CRITICAL(&s_sock_spin);
+}
+
+static void sock_closed(void) {
+    portENTER_CRITICAL(&s_sock_spin);
+    if (s_nsocks > 0) {
+        s_nsocks--;
+    }
+    portEXIT_CRITICAL(&s_sock_spin);
 }
 
 /* send exactly len bytes or fail */
@@ -714,9 +733,11 @@ static void tp_close(tp_t *tp) {
         network_tls_close(tp->tls); /* also closes the fd */
         tp->tls = NULL;
         tp->fd = -1;
+        sock_closed();
     } else if (tp->fd >= 0) {
         close(tp->fd);
         tp->fd = -1;
+        sock_closed();
     }
 }
 
@@ -805,6 +826,7 @@ static void session_task(void *arg) {
             if (tp.tls == NULL) {
                 ESP_LOGW(TAG, "TLS upgrade failed, closing");
                 tp.fd = -1; /* consumed by upgrade (all failure paths) */
+                sock_closed(); /* fd died inside the TLS layer, not tp_close */
                 xSemaphoreGive(s_mux);
                 break;
             }
@@ -892,8 +914,8 @@ static void server_task(void *arg) {
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "qnetd-side listening on port %d (FFSplit+LMS)",
-             (int)quorumesp_config_get()->qdevice_port);
+    ESP_LOGI(TAG, "qnetd-side listening on port %d (FFSplit+LMS, lwip_socks=%d)",
+             (int)quorumesp_config_get()->qdevice_port, CONFIG_LWIP_MAX_SOCKETS);
     quorumesp_watchdog_add_current();
     for (;;) {
         struct sockaddr_in peer;
@@ -910,12 +932,15 @@ static void server_task(void *arg) {
         FD_SET(lfd, &rfds);
         if (select(lfd + 1, &rfds, NULL, NULL, &sel_tv) <= 0) {
             if (++idle_ticks >= 12) {
-                int n;
+                int n, sk;
                 idle_ticks = 0;
                 xSemaphoreTake(s_mux, portMAX_DELAY);
                 n = s_nsessions;
                 xSemaphoreGive(s_mux);
-                ESP_LOGI(TAG, "status: sessions=%d heap=%u", n,
+                portENTER_CRITICAL(&s_sock_spin);
+                sk = s_nsocks;
+                portEXIT_CRITICAL(&s_sock_spin);
+                ESP_LOGI(TAG, "status: sessions=%d socks=%d heap=%u", n, sk,
                          (unsigned)esp_get_free_heap_size());
             }
             continue;
@@ -928,6 +953,7 @@ static void server_task(void *arg) {
             continue;
         }
         tune_servant_socket(cfd);
+        sock_opened();
         xSemaphoreTake(s_mux, portMAX_DELAY);
         nrun = s_nsessions;
         if (nrun < QESP_MAX_SESSIONS) {
@@ -937,6 +963,7 @@ static void server_task(void *arg) {
         if (nrun >= QESP_MAX_SESSIONS) {
             ESP_LOGW(TAG, "session table full (%d), refusing client", nrun);
             close(cfd);
+            sock_closed();
             continue;
         }
         {
@@ -950,6 +977,7 @@ static void server_task(void *arg) {
             s_nsessions--;
             xSemaphoreGive(s_mux);
             close(cfd);
+            sock_closed();
             continue;
         }
         *pfd = cfd;
@@ -960,6 +988,7 @@ static void server_task(void *arg) {
             s_nsessions--;
             xSemaphoreGive(s_mux);
             close(cfd);
+            sock_closed();
             free(pfd);
             continue;
         }
