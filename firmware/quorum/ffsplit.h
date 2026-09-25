@@ -48,6 +48,9 @@ void qesp_ff_remove(qesp_ff_cluster_t *c, int idx);
 
 void qesp_ff_set_ids(uint32_t *dst, size_t *ndst, const uint32_t *src, size_t n);
 
+/* 1 if id is in the cluster's current quorate selection. */
+int qesp_ff_in_quorate(const qesp_ff_cluster_t *c, uint32_t id);
+
 /* 1 if partition of client idx is "better" than the current best
  * (best_idx < 0 = no best yet). Direct port of partition_cmp. */
 int qesp_ff_better(const qesp_ff_cluster_t *c, int idx, int best_idx);

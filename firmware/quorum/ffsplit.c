@@ -129,6 +129,10 @@ static void stats(const qesp_ff_cluster_t *c, int idx,
     }
 }
 
+int qesp_ff_in_quorate(const qesp_ff_cluster_t *c, uint32_t id) {
+    return has_id(c->quorate, c->nquorate, id);
+}
+
 int qesp_ff_better(const qesp_ff_cluster_t *c, int idx, int best_idx) {
     const qesp_ff_client_t *a = &c->clients[idx];
     size_t b_ncfg = 0, b_nmemb = 0;

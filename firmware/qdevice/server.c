@@ -943,3 +943,38 @@ esp_err_t qdevice_server_start(void) {
     }
     return ESP_OK;
 }
+
+void qdevice_status_snapshot(qdev_status_t *out) {
+    uint8_t *p = (uint8_t *)out;
+    size_t i;
+    for (i = 0; i < sizeof(*out); i++) {
+        p[i] = 0;
+    }
+    out->uptime_s = (uint32_t)(now_us() / 1000000);
+    out->algo = (uint8_t)s_algo;
+    if (xSemaphoreTake(s_mux, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return; /* best effort: partial/empty snapshot, never block */
+    }
+    if (s_have_cluster) {
+        strncpy(out->cluster, s_cluster, sizeof(out->cluster) - 1);
+    }
+    for (i = 0; i < QESP_FF_MAX_CLIENTS && out->n < QDEV_SNAP_MAX; i++) {
+        qesp_ff_client_t *cl = &s_ff.clients[i];
+        qdev_cli_snap_t *dst;
+        if (!cl->used) {
+            continue;
+        }
+        dst = &out->cli[out->n++];
+        dst->node = cl->node_id;
+        dst->algo = (uint8_t)s_algo;
+        dst->state = 2; /* registered = past handshake */
+        dst->tls = (s_tp[i].tls != NULL) ? 1 : 0;
+        if (s_algo == QESP_ALGO_LMS) {
+            dst->vote = s_lms_last[i];
+        } else {
+            dst->vote = qesp_ff_in_quorate(&s_ff, cl->node_id) ?
+                        QESP_VOTE_ACK : QESP_VOTE_NACK;
+        }
+    }
+    xSemaphoreGive(s_mux);
+}

@@ -17,6 +17,7 @@
 #include "time_sync.h"
 #include "tls.h"
 #include "wifi.h"
+#include "api.h"
 
 static const char *TAG = "BOOT";
 
@@ -59,6 +60,9 @@ void app_main(void) {
     if (qdevice_server_start() != ESP_OK) {
         ESP_LOGE(TAG, "server task failed");
         return;
+    }
+    if (web_api_init() != ESP_OK) {
+        ESP_LOGW(TAG, "web ui failed — diagnostics only, continuing");
     }
     ESP_LOGI(TAG, "up. point your qdevice client at this IP, port %d",
              (int)quorumesp_config_get()->qdevice_port);

@@ -21,6 +21,7 @@ static const char *TAG = "NETWORK";
 static EventGroupHandle_t s_ev;
 static int s_retry = 0;
 static uint32_t s_ip_be = 0;
+static int s_rssi = 0;
 
 static void ev_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
@@ -131,5 +132,23 @@ esp_err_t network_wifi_connect(uint32_t *out_ip_be) {
     if (out_ip_be != NULL) {
         *out_ip_be = s_ip_be;
     }
+    {
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            s_rssi = ap.rssi;
+        }
+    }
     return ESP_OK;
+}
+
+uint32_t network_wifi_get_ip(void) {
+    return s_ip_be;
+}
+
+int network_wifi_get_rssi(void) {
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        s_rssi = ap.rssi;
+    }
+    return s_rssi;
 }

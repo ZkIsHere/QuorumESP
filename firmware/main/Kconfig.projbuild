@@ -25,4 +25,13 @@ menu "QuorumESP dev"
         bool "Require + verify client certificate (round 2b mutual auth)"
         default n
 
+    config QUORUMESP_WEB_ENABLE
+        bool "Diagnostic web UI, GET-only read-only (see docs/web.md)"
+        default n
+
+    config QUORUMESP_WEB_PORT
+        int "Web UI listen port"
+        default 80
+        depends on QUORUMESP_WEB_ENABLE
+
 endmenu
