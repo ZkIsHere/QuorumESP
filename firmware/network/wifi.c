@@ -85,12 +85,18 @@ esp_err_t network_wifi_connect(uint32_t *out_ip_be) {
     ESP_LOGW(TAG, "DEV TRANSPORT IS WI-FI (non-production, see docs/hardware.md)");
 
     if (quorumesp_config_get_wifi((char *)cfg.sta.ssid,
-                                  sizeof(cfg.sta.ssid),
-                                  (char *)cfg.sta.password,
-                                  sizeof(cfg.sta.password)) != ESP_OK) {
+                                   sizeof(cfg.sta.ssid),
+                                   (char *)cfg.sta.password,
+                                   sizeof(cfg.sta.password)) != ESP_OK) {
         ESP_LOGE(TAG, "no Wi-Fi credentials: provision NVS (docs/provisioning.md) or set via menuconfig");
         return ESP_FAIL;
     }
+    /* Debug aid: SSID is public (beaconed) so logging it is safe; the
+     * password value is NEVER logged, only its length. Quotes expose
+     * stray leading/trailing spaces and '?' exposes mojibake from a
+     * wrong CSV encoding. */
+    ESP_LOGI(TAG, "joining SSID '%s' (pass len %u)",
+             (char *)cfg.sta.ssid, (unsigned)strlen((char *)cfg.sta.password));
 
     s_ev = xEventGroupCreate();
     if (s_ev == NULL) {
