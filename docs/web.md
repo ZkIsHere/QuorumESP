@@ -3,43 +3,51 @@
 Read-only diagnostics. Không điều khiển quorum, không đổi config,
 không trigger OTA. Hiển thị sau khi QDevice core đã ổn định.
 
-## Bật (dev only, default OFF)
+## Bật + auth (dev only, default OFF)
 
-```text
-idf.py menuconfig  ->  QuorumESP dev  ->  Diagnostic web UI
-```
+`QUORUMESP_WEB_ENABLE=n` (default): `web_api_init()` là no-op.
+Production để OFF (giảm attack surface).
 
-`QUORUMESP_WEB_ENABLE=n` (default): `web_api_init()` là no-op, không
-link httpd vào đường chạy. Production để OFF (giảm attack surface).
+Bật trong menuconfig (`QuorumESP dev`):
 
-## Endpoints (chỉ GET — POST trả 405 do không có handler đăng ký)
+- `QUORUMESP_WEB_ENABLE=y`
+- `QUORUMESP_WEB_USER` / `QUORUMESP_WEB_PASSWORD` (local sdkconfig,
+  git-ignored — giống cách giữ Wi-Fi secret)
 
-| Method | Path         | Nội dung                                             |
-| ------ | ------------ | ---------------------------------------------------- |
-| GET    | `/`          | Trang HTML: version, id, uptime, heap, net, cluster, bảng clients |
-| GET    | `/api/status`| JSON snapshot: firmware / net / cluster / clients    |
-| GET    | `/api/log`   | JSON array 40 dòng log gần nhất (không chứa secret)  |
+Không user/pass → UI từ chối khởi động (`ESP_FAIL`, không có trang mở).
+Mọi handler kiểm tra `Authorization: Basic` (so sánh constant-time);
+thiếu/sai → `401` + `WWW-Authenticate`. POST vốn đã 405 (không handler).
+
+## Hiển thị (cố ý tối giản)
+
+- Project name + device id, version, uptime (`22s`, `1h 1m 1s`,
+  `2d 3h 4m 5s`, lên tới `y`)
+- Bảng clients đang kết nối (node, algo)
+- Log gần nhất (không chứa secret — project không bao giờ log secret)
+
+Endpoints (đều GET + auth):
+
+| Method | Path         | Nội dung                              |
+| ------ | ------------ | ------------------------------------- |
+| GET    | `/`          | Trang HTML: tên/version/uptime/clients/log |
+| GET    | `/api/status`| JSON cùng tập field                   |
+| GET    | `/api/log`   | JSON array 40 dòng log gần nhất       |
 
 Snapshot lấy qua `qdevice_status_snapshot()` — copy có khóa, timeout
 200 ms, không bao giờ block đường vote.
 
-Vote hiển thị là vote đã decide (FFSplit: trong quorate → ack;
-LMS: vote đã lưu), không phải trạng thái quorum của cluster.
-
 ## Giới hạn đã biết
 
 - Log ring chỉ giữ từ lúc web init (dòng boot trước đó không có).
-  Muốn giữ log boot: chuyển `esp_log_set_vprintf` sớm hơn trong
-  `app_main` (chưa làm — không ảnh hưởng đường vote).
-- Không auth. Chỉ dùng trong mạng lab tin cậy, tắt khi xong việc.
-- Chưa có HTTPS cho UI (qdevice TLS là kênh riêng, không liên quan).
+- Không auth session/rate-limit, không HTTPS cho UI — chỉ dùng trong
+  mạng lab tin cậy, tắt khi xong việc. (qdevice TLS là kênh riêng,
+  không liên quan.)
+- user/pass nằm plaintext trong sdkconfig/NVS build — chấp nhận được
+  cho dev, production cần provisioning riêng (chưa thiết kế).
 
-## Live test (đã chạy, board WROOM-32D)
+## Live test (board WROOM-32D, đã chạy)
 
-- `GET /` render đúng: version/id/uptime/heap/ip/rssi/tls/cluster/bảng node.
-- `GET /api/status` JSON hợp lệ, khớp session thật
-  (node 1, ffsplit, tls 1, vote ack, mutual CN verified).
-- `GET /api/log` chứa dòng boot + session (`TLS handshake done`,
-  `VOTE_INFO node=1 vote=1`).
-- `POST /` và `POST /api/status` → `405` (read-only đúng thiết kế).
+- Không auth → `401` cả 3 endpoint; sai pass → `401`.
+- Đúng auth → `/api/status` JSON gọn (`project/version/uptime/clients`),
+  `/` render bảng node + `<pre>` log khớp session thật.
 - Sau test: flash lại bản default (web OFF), board về steady state.

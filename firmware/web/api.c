@@ -1,4 +1,6 @@
-/* Diagnostic web UI — read-only (see api.h). Never add POST/PUT/DELETE. */
+/* Diagnostic web UI — read-only + Basic auth (see api.h).
+ * Never add POST/PUT/DELETE. Never display secrets.
+ */
 #include "api.h"
 
 #include <stdarg.h>
@@ -11,12 +13,11 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "mbedtls/base64.h"
 
 #include "config.h"
 #include "qesp_defs.h"
 #include "server.h"
-#include "tls.h"
-#include "wifi.h"
 
 static const char *TAG = "WEB";
 
@@ -59,6 +60,59 @@ static int web_log_hook(const char *fmt, va_list ap) {
         return s_prev_vprintf(fmt, ap);
     }
     return vprintf(fmt, ap);
+}
+
+/* ---- Basic auth (credentials from menuconfig, never committed) ---- */
+
+static int const_time_eq(const char *a, const char *b, size_t n) {
+    unsigned diff = 0;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        diff |= (unsigned char)a[i] ^ (unsigned char)b[i];
+    }
+    return diff == 0;
+}
+
+static int has_auth(httpd_req_t *r) {
+    /* "user:pass" expected; header value "Basic <b64>" (160B cap: longer
+     * credentials fail closed). */
+    char hdr[160];
+    char exp[128];
+    unsigned char dec[128];
+    size_t olen = 0;
+    size_t explen;
+    const char *b64;
+
+    if (CONFIG_QUORUMESP_WEB_USER[0] == '\0' ||
+        CONFIG_QUORUMESP_WEB_PASSWORD[0] == '\0') {
+        return 0;
+    }
+    if (httpd_req_get_hdr_value_str(r, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
+        return 0;
+    }
+    if (strncmp(hdr, "Basic ", 6) != 0) {
+        return 0;
+    }
+    b64 = hdr + 6;
+    if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &olen, (const unsigned char *)b64,
+                               strlen(b64)) != 0) {
+        return 0;
+    }
+    dec[olen < sizeof(dec) ? olen : sizeof(dec) - 1] = '\0';
+    snprintf(exp, sizeof(exp), "%s:%s",
+             CONFIG_QUORUMESP_WEB_USER, CONFIG_QUORUMESP_WEB_PASSWORD);
+    explen = strlen(exp);
+    if (olen != explen) {
+        return 0;
+    }
+    return const_time_eq((const char *)dec, exp, explen);
+}
+
+static esp_err_t deny(httpd_req_t *r) {
+    httpd_resp_set_status(r, "401 Unauthorized");
+    httpd_resp_set_hdr(r, "WWW-Authenticate", "Basic realm=\"QuorumESP\"");
+    httpd_resp_send(r, "auth required", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
 }
 
 /* ---- shared response buffer (handlers serialize on s_resp_mux) ---- */
@@ -108,6 +162,37 @@ static size_t json_escape(char *dst, size_t cap, const char *src) {
     return n;
 }
 
+/* 90 -> "1m 30s"; 90061 -> "1d 1h 1m 1s"; 0 -> "0s". */
+static void fmt_uptime(char *dst, size_t cap, uint32_t sec) {
+    static const struct {
+        const char *sfx;
+        uint32_t div;
+    } units[] = {
+        {"y", 365 * 86400}, {"mo", 30 * 86400}, {"w", 7 * 86400},
+        {"d", 86400}, {"h", 3600}, {"m", 60}, {"s", 1},
+    };
+    size_t len = 0, u = 0;
+    int any = 0;
+    for (u = 0; u < sizeof(units) / sizeof(units[0]); u++) {
+        uint32_t v = sec / units[u].div;
+        /* Skip leading zero units but always show seconds. */
+        if (v == 0 && !(any || units[u].div == 1)) {
+            continue;
+        }
+        sec -= v * units[u].div;
+        len += (size_t)snprintf(dst + len, len < cap ? cap - len : 0,
+                                "%s%u%s", any ? " " : "",
+                                (unsigned)v, units[u].sfx);
+        any = 1;
+        if (len >= cap) {
+            break;
+        }
+    }
+    if (cap > 0) {
+        dst[cap - 1] = '\0';
+    }
+}
+
 static const char *algo_name(uint8_t a) {
     switch (a) {
     case QESP_ALGO_FFSPLIT:
@@ -123,67 +208,35 @@ static const char *algo_name(uint8_t a) {
     }
 }
 
-static const char *vote_name(uint8_t v) {
-    switch (v) {
-    case QESP_VOTE_ACK:
-        return "ack";
-    case QESP_VOTE_NACK:
-        return "nack";
-    case QESP_VOTE_ASK_LATER:
-        return "ask-later";
-    case QESP_VOTE_NO_CHANGE:
-        return "no-change";
-    case QESP_VOTE_WAIT_FOR_REPLY:
-        return "wait-for-reply";
-    default:
-        return "undefined";
-    }
-}
-
-/* s_ip_be is network byte order (matches IP2STR usage in wifi.c). */
-static void fmt_ip(char *dst, size_t cap, uint32_t ip) {
-    const uint8_t *b = (const uint8_t *)&ip;
-    snprintf(dst, cap, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
-}
-
 static esp_err_t h_status(httpd_req_t *r) {
     qdev_status_t st;
     const qesp_config_t *cfg = quorumesp_config_get();
     const esp_app_desc_t *app = esp_app_get_description();
-    char ip[16];
-    char cluster_esc[sizeof(st.cluster) * 2 + 8];
+    char up[64];
     size_t len = 0;
     uint8_t i;
 
+    if (!has_auth(r)) {
+        return deny(r);
+    }
     qdevice_status_snapshot(&st);
-    fmt_ip(ip, sizeof(ip), network_wifi_get_ip());
-    json_escape(cluster_esc, sizeof(cluster_esc), st.cluster);
+    fmt_uptime(up, sizeof(up), st.uptime_s);
 
     if (xSemaphoreTake(s_resp_mux, pdMS_TO_TICKS(2000)) != pdTRUE) {
         httpd_resp_send_500(r);
         return ESP_FAIL;
     }
     len += (size_t)snprintf(s_resp + len, RESP_MAX - len,
-                            "{\"firmware\":{\"version\":\"%s\",\"id\":\"%s\","
-                            "\"uptime_s\":%u,\"heap_free\":%u},"
-                            "\"net\":{\"ip\":\"%s\",\"rssi_dbm\":%d,\"tls\":%d},"
-                            "\"cluster\":{\"name\":\"%s\",\"algo\":\"%s\"},"
+                            "{\"project\":\"QuorumESP\",\"id\":\"%s\","
+                            "\"version\":\"%s\",\"uptime_s\":%u,\"uptime\":\"%s\","
                             "\"clients\":[",
-                            app->version, cfg->device_id,
-                            (unsigned)st.uptime_s,
-                            (unsigned)esp_get_free_heap_size(),
-                            ip, network_wifi_get_rssi(),
-                            network_tls_available(),
-                            cluster_esc, algo_name(st.algo));
+                            cfg->device_id, app->version,
+                            (unsigned)st.uptime_s, up);
     for (i = 0; i < st.n; i++) {
         len += (size_t)snprintf(s_resp + len, RESP_MAX - len,
-                                "%s{\"node\":%u,\"algo\":\"%s\",\"state\":%u,"
-                                "\"tls\":%u,\"vote\":\"%s\"}",
+                                "%s{\"node\":%u,\"algo\":\"%s\"}",
                                 i ? "," : "", (unsigned)st.cli[i].node,
-                                algo_name(st.cli[i].algo),
-                                (unsigned)st.cli[i].state,
-                                (unsigned)st.cli[i].tls,
-                                vote_name(st.cli[i].vote));
+                                algo_name(st.cli[i].algo));
     }
     len += (size_t)snprintf(s_resp + len, RESP_MAX - len, "]}");
     httpd_resp_set_type(r, "application/json");
@@ -197,6 +250,9 @@ static esp_err_t h_log(httpd_req_t *r) {
     unsigned count, head, i;
     size_t len = 0;
 
+    if (!has_auth(r)) {
+        return deny(r);
+    }
     portENTER_CRITICAL(&s_log_spin);
     count = s_count;
     head = s_head;
@@ -233,12 +289,15 @@ static esp_err_t h_root(httpd_req_t *r) {
     qdev_status_t st;
     const qesp_config_t *cfg = quorumesp_config_get();
     const esp_app_desc_t *app = esp_app_get_description();
-    char ip[16];
+    char up[64];
     size_t len = 0;
     uint8_t i;
 
+    if (!has_auth(r)) {
+        return deny(r);
+    }
     qdevice_status_snapshot(&st);
-    fmt_ip(ip, sizeof(ip), network_wifi_get_ip());
+    fmt_uptime(up, sizeof(up), st.uptime_s);
 
     if (xSemaphoreTake(s_resp_mux, pdMS_TO_TICKS(2000)) != pdTRUE) {
         httpd_resp_send_500(r);
@@ -246,32 +305,64 @@ static esp_err_t h_root(httpd_req_t *r) {
     }
     len += (size_t)snprintf(s_resp + len, RESP_MAX - len,
                             "<html><head><title>QuorumESP</title></head><body>"
-                            "<h1>QuorumESP (EXPERIMENTAL)</h1>"
-                            "<p>firmware %s id %s uptime %us heap %u</p>"
-                            "<p>net %s rssi %d dBm tls %d</p>"
-                            "<p>cluster %.60s algo %s qdevice port %u</p>"
-                            "<table border=1><tr><th>node</th><th>algo</th>"
-                            "<th>tls</th><th>vote</th></tr>",
-                            app->version, cfg->device_id,
-                            (unsigned)st.uptime_s,
-                            (unsigned)esp_get_free_heap_size(),
-                            ip, network_wifi_get_rssi(),
-                            network_tls_available(),
-                            st.cluster, algo_name(st.algo),
-                            (unsigned)cfg->qdevice_port);
+                            "<h1>QuorumESP %s</h1>"
+                            "<p>version %s</p>"
+                            "<p>uptime %s</p>"
+                            "<h2>clients</h2>"
+                            "<table border=1><tr><th>node</th><th>algo</th></tr>",
+                            cfg->device_id, app->version, up);
     for (i = 0; i < st.n; i++) {
         len += (size_t)snprintf(s_resp + len, RESP_MAX - len,
-                                "<tr><td>%u</td><td>%s</td><td>%u</td>"
-                                "<td>%s</td></tr>",
+                                "<tr><td>%u</td><td>%s</td></tr>",
                                 (unsigned)st.cli[i].node,
-                                algo_name(st.cli[i].algo),
-                                (unsigned)st.cli[i].tls,
-                                vote_name(st.cli[i].vote));
+                                algo_name(st.cli[i].algo));
     }
     len += (size_t)snprintf(s_resp + len, RESP_MAX - len,
                             "</table>"
                             "<p><a href=\"/api/status\">status json</a> "
                             "<a href=\"/api/log\">log json</a></p>"
+                            "<h2>log</h2><pre>");
+    {
+        unsigned count, head, k;
+        portENTER_CRITICAL(&s_log_spin);
+        count = s_count;
+        head = s_head;
+        portEXIT_CRITICAL(&s_log_spin);
+        for (k = 0; k < count; k++) {
+            char raw[LOG_LINE_MAX];
+            unsigned idx = (head - count + k) % LOG_RING_N;
+            portENTER_CRITICAL(&s_log_spin);
+            strncpy(raw, s_ring[idx], sizeof(raw) - 1);
+            raw[sizeof(raw) - 1] = '\0';
+            portEXIT_CRITICAL(&s_log_spin);
+            /* HTML-escape the two characters that break <pre>. */
+            char *p;
+            for (p = raw; *p != '\0'; p++) {
+                const char *rep = NULL;
+                if (*p == '<') {
+                    rep = "&lt;";
+                } else if (*p == '&') {
+                    rep = "&amp;";
+                }
+                if (rep != NULL) {
+                    len += (size_t)snprintf(s_resp + len, RESP_MAX - len, "%s", rep);
+                } else if (len + 2 < RESP_MAX) {
+                    s_resp[len++] = *p;
+                    s_resp[len] = '\0';
+                } else {
+                    break;
+                }
+            }
+            if (len + 2 < RESP_MAX) {
+                s_resp[len++] = '\n';
+                s_resp[len] = '\0';
+            } else {
+                break;
+            }
+        }
+    }
+    len += (size_t)snprintf(s_resp + len, RESP_MAX - len,
+                            "</pre>"
                             "<p>Read-only diagnostics. "
                             "This page cannot change quorum state.</p>"
                             "</body></html>");
@@ -302,6 +393,13 @@ esp_err_t web_api_init(void) {
         .handler = h_log, .user_ctx = NULL
     };
 
+    /* Fail closed: no credentials -> no UI at all (never an open page). */
+    if (CONFIG_QUORUMESP_WEB_USER[0] == '\0' ||
+        CONFIG_QUORUMESP_WEB_PASSWORD[0] == '\0') {
+        ESP_LOGE(TAG, "web auth not configured (QUORUMESP_WEB_USER/PASSWORD "
+                      "empty) — refusing to start an open UI");
+        return ESP_FAIL;
+    }
     s_resp_mux = xSemaphoreCreateMutex();
     if (s_resp_mux == NULL) {
         return ESP_FAIL;
@@ -317,7 +415,7 @@ esp_err_t web_api_init(void) {
     httpd_register_uri_handler(srv, &u_root);
     httpd_register_uri_handler(srv, &u_status);
     httpd_register_uri_handler(srv, &u_log);
-    ESP_LOGI(TAG, "web ui on port %d (GET only, read-only)",
+    ESP_LOGI(TAG, "web ui on port %d (GET + Basic auth, read-only)",
              CONFIG_QUORUMESP_WEB_PORT);
     return ESP_OK;
 #endif

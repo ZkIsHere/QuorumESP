@@ -34,4 +34,14 @@ menu "QuorumESP dev"
         default 80
         depends on QUORUMESP_WEB_ENABLE
 
+    config QUORUMESP_WEB_USER
+        string "Web UI username (empty = UI refuses to start)"
+        default ""
+        depends on QUORUMESP_WEB_ENABLE
+
+    config QUORUMESP_WEB_PASSWORD
+        string "Web UI password (menuconfig only — local sdkconfig, never committed)"
+        default ""
+        depends on QUORUMESP_WEB_ENABLE
+
 endmenu
