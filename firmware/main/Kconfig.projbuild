@@ -1,32 +1,33 @@
-menu "QuorumESP dev"
+menu "QuorumESP"
 
-    config QUORUMESP_WIFI_SSID
-        string "Dev Wi-Fi SSID (menuconfig only — local sdkconfig, never committed)"
-        default ""
+    menu "Network"
 
-    config QUORUMESP_WIFI_PASSWORD
-        string "Dev Wi-Fi password (menuconfig only — local sdkconfig, never committed)"
-        default ""
+        menu "Wi-Fi"
 
-    config QUORUMESP_SERVER_PORT
-        int "qnetd-side TCP listen port"
-        default 5403
+            config QUORUMESP_WIFI_SSID
+                string "Wi-Fi SSID (menuconfig only — local sdkconfig, never committed)"
+                default ""
 
-    config QUORUMESP_OTA_CHECK
-        bool "Check for OTA update at boot (see docs/ota.md)"
-        default n
+            config QUORUMESP_WIFI_PASSWORD
+                string "Wi-Fi password (menuconfig only — local sdkconfig, never committed)"
+                default ""
 
-    config QUORUMESP_OTA_GITHUB_REPO
-        string "GitHub repo for release OTA (owner/name)"
-        default "ZkIsHere/QuorumESP"
-        depends on QUORUMESP_OTA_CHECK
+        endmenu
+
+        comment "Ethernet is not supported yet — Wi-Fi only for now"
+
+        config QUORUMESP_SERVER_PORT
+            int "qnetd-side TCP listen port"
+            default 5403
+
+    endmenu
 
     config QUORUMESP_REQUIRE_CLIENT_CERT
-        bool "Require + verify client certificate (round 2b mutual auth)"
+        bool "Require + verify client certificate (mutual TLS)"
         default n
 
     config QUORUMESP_WEB_ENABLE
-        bool "Diagnostic web UI, GET-only read-only (see docs/web.md)"
+        bool "Enable web management UI (see docs/web.md)"
         default n
 
     config QUORUMESP_WEB_PORT
@@ -43,5 +44,19 @@ menu "QuorumESP dev"
         string "Web UI password (menuconfig only — local sdkconfig, never committed)"
         default ""
         depends on QUORUMESP_WEB_ENABLE
+
+    config QUORUMESP_WEB_LOGIN_MAX_FAIL
+        int "Failed logins before an IP goes silent"
+        default 5
+        depends on QUORUMESP_WEB_ENABLE
+
+    config QUORUMESP_WEB_LOGIN_BLOCK_S
+        int "Silent-drop seconds after login rate limit"
+        default 60
+        depends on QUORUMESP_WEB_ENABLE
+
+    config QUORUMESP_DEBUG
+        bool "Debug mode (verbose logs + extra diagnostics on web UI)"
+        default n
 
 endmenu

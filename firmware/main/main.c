@@ -12,7 +12,6 @@
 
 #include "server.h"
 #include "config.h"
-#include "ota.h"
 #include "watchdog.h"
 #include "time_sync.h"
 #include "tls.h"
@@ -43,6 +42,10 @@ void app_main(void) {
     if (quorumesp_config_init() != ESP_OK) {
         ESP_LOGW(TAG, "config init failed, safe defaults in use");
     }
+#if CONFIG_QUORUMESP_DEBUG
+    esp_log_level_set("*", ESP_LOG_DEBUG);
+    ESP_LOGW(TAG, "DEBUG mode on (verbose logs + extra web diagnostics)");
+#endif
     quorumesp_watchdog_init();
     if (network_wifi_connect(NULL) != ESP_OK) {
         ESP_LOGE(TAG, "wifi up failed — provision NVS (docs/provisioning.md)");
@@ -51,9 +54,6 @@ void app_main(void) {
     if (network_time_sync() != ESP_OK) {
         ESP_LOGW(TAG, "no wall-clock — mutual TLS will fail-closed");
     }
-#if CONFIG_QUORUMESP_OTA_CHECK
-    quorumesp_ota_check_async_and_wait(); /* reboots on success, else continues */
-#endif
     if (network_tls_init() != ESP_OK) {
         ESP_LOGW(TAG, "TLS unavailable (no dev certs) — plaintext only");
     }
@@ -66,5 +66,4 @@ void app_main(void) {
     }
     ESP_LOGI(TAG, "up. point your qdevice client at this IP, port %d",
              (int)quorumesp_config_get()->qdevice_port);
-    quorumesp_ota_confirm_task_start(); /* rollback guard (docs/ota.md) */
 }
