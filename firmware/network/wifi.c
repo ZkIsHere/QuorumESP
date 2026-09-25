@@ -22,6 +22,10 @@ static EventGroupHandle_t s_ev;
 static int s_retry = 0;
 static uint32_t s_ip_be = 0;
 static int s_rssi = 0;
+/* 0 until the first GOT_IP: bounded retries, then boot fails loudly.
+ * 1 afterwards: link losses retry forever (a quorum box must come back
+ * on its own; sessions already fail-closed via DPD). */
+static int s_boot_done = 0;
 
 static void ev_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
@@ -29,7 +33,17 @@ static void ev_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry < WIFI_MAX_RETRY) {
+        if (s_boot_done) {
+            /* Post-boot: AP reboot, interference, roaming — keep trying.
+             * No counter: giving up here would leave a silent offline box
+             * that only a power cycle revives. Clients see DPD timeouts
+             * and reconnect when we are back (fail-closed on their side). */
+            ESP_LOGW(TAG, "link lost after boot, reconnecting (retry %d)",
+                     s_retry + 1);
+            s_retry++;
+            s_ip_be = 0;
+            esp_wifi_connect();
+        } else if (s_retry < WIFI_MAX_RETRY) {
             s_retry++;
             ESP_LOGI(TAG, "wifi retry %d/%d", s_retry, WIFI_MAX_RETRY);
             esp_wifi_connect();
@@ -39,6 +53,11 @@ static void ev_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
         s_ip_be = ev->ip_info.ip.addr;
+        if (!s_boot_done) {
+            s_boot_done = 1;
+        } else {
+            ESP_LOGW(TAG, "link recovered");
+        }
         s_retry = 0;
         xEventGroupSetBits(s_ev, WIFI_GOT_IP_BIT);
     }

@@ -47,3 +47,23 @@ nào có schematic rõ ràng (VD: LilyGO T-ETH, Espressif ETH devkit).
 2. Up link, DHCP/static IP, ping soak test 24h.
 3. Mất link / rút cáp → `ethernet` báo sự kiện, session invalidate (fail-closed).
 4. Ghi kết quả vào file này (board thực tế + rev + chân pin).
+
+## 7. Dev board hiện tại (WROOM-32D, Wi-Fi) — bài học nguồn
+
+> 2026-09-25: board boot-loop `E BOD: Brownout detector was triggered`
+> ngay tại `phy_init` (RF calibration burst), `rst:0x3 (SW_RESET)`,
+> không bao giờ tới `wifi up`. Trước đó cùng ngày board chạy ổn định
+> nhiều giờ (flash, web UI live, vote thật) rồi rớt dần: PREINIT còn
+> trả lời nhưng TLS handshake (CPU + TX burst) làm sập nguồn giữa chừng.
+> Đây là lỗi nguồn USB/cáp, KHÔNG phải firmware (TX đã cap 13 dBm trong
+> `wifi.c`, nhưng không cứu được supply đã yếu).
+>
+> Quy tắc:
+>
+> - Mọi rớt mạng/reboot khó hiểu → nghi nguồn TRƯỚC khi nghi code.
+>   Dấu hiệu: `E BOD`, `rst:0x3` ngay sau `phy_init`, hoặc chết giữa
+>   TLS handshake/OTA download.
+> - Dùng nguồn ngoài/cáp tốt, không đổi cổng USB giữa chừng khi test.
+> - Mở COM3 (kể cả passive snoop) RESET board qua mạch DTR/RTS
+>   (bootloader `rst:0x1` ngay khi open). Tuyệt đối không mở serial
+>   trong lúc chạy live test mạng — quan sát qua log mạng/probe.

@@ -8,7 +8,7 @@
 | Case | Expected (fail-closed) | Evidence |
 |---|---|---|
 | TCP peer đóng đột ngột | invalidate session, recompute vote cho phần còn lại | live nhiều lần (`client session end`, recompute log) |
-| Mất Wi-Fi (AP/client rớt) | DPD hb×1.5 đóng session; client reconnect khi mạng về | live (`dead peer, closing` khi kill corosync) |
+| Mất Wi-Fi (AP/client rớt) | DPD hb×1.5 đóng session; client reconnect khi mạng về; **device retry vô hạn sau boot** (`s_boot_done`) | live (`dead peer, closing` khi kill corosync); reconnect-vô-hạn: code + build OK, **live-deferred (board brownout nguồn 2026-09-25, xem docs/hardware.md §7)** |
 | ESP32 reboot / mất nguồn | client reconnect từ PREINIT; NVS/config persistent | live (reboot EN + brownout, `config v1 id=` giữ nguyên) |
 | ESP32 brownout (nguồn yếu) | reset, boot lại sạch (không half-state) | live (đầu project, fix bằng nguồn ngoài) |
 | Oversize frame (>32K) | drain + `MESSAGE_TOO_LONG`, giữ kết nối | code + drain path; live 8K garbage → `ERROR_DECODING_MSG` + alive (oversize-probe) |
