@@ -45,9 +45,11 @@ try:
 except (socket.timeout, ConnectionError) as e:
     print(f"NO-REPLY ({e}): bad - server must answer with error")
     sys.exit(1)
-# connection must still be usable: fresh PREINIT gets a reply
+# connection must still be usable: fresh PREINIT gets a reply.
+# NOTE: cluster must match the registered one (single-cluster server
+# refuses anything else — that path is correct, not a failure).
 s.sendall(frame(0, struct.pack("!HH", 0, 4) + struct.pack("!I", 99) +
-                struct.pack("!HH", 1, 2) + b"ab"))
+                struct.pack("!HH", 1, 12) + b"interop-test"))
 s.settimeout(8)
 try:
     mt, _ = read_frame()
