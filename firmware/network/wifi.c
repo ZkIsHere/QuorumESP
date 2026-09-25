@@ -29,23 +29,38 @@ static int s_boot_done = 0;
 
 static void ev_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
-    (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        /* data = wifi_event_sta_disconnected_t: reason tells wrong-pass
+         * (AUTH_FAIL/4WAY_TIMEOUT) apart from AP-gone (NO_AP_FOUND). */
+        wifi_event_sta_disconnected_t *d = (wifi_event_sta_disconnected_t *)data;
+        uint8_t reason = (d != NULL) ? d->reason : 0;
+        const char *hint = "";
+        if (reason == WIFI_REASON_AUTH_FAIL) {
+            hint = " (wrong password?)";
+        } else if (reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+                   reason == WIFI_REASON_HANDSHAKE_TIMEOUT) {
+            hint = " (wrong password or AP refusing?)";
+        } else if (reason == WIFI_REASON_NO_AP_FOUND ||
+                   reason == WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD ||
+                   reason == WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD) {
+            hint = " (SSID not visible: wrong SSID / 5GHz-only / AP down?)";
+        }
         if (s_boot_done) {
             /* Post-boot: AP reboot, interference, roaming — keep trying.
              * No counter: giving up here would leave a silent offline box
              * that only a power cycle revives. Clients see DPD timeouts
              * and reconnect when we are back (fail-closed on their side). */
-            ESP_LOGW(TAG, "link lost after boot, reconnecting (retry %d)",
-                     s_retry + 1);
+            ESP_LOGW(TAG, "link lost after boot, reconnecting (retry %d, reason %u%s)",
+                     s_retry + 1, reason, hint);
             s_retry++;
             s_ip_be = 0;
             esp_wifi_connect();
         } else if (s_retry < WIFI_MAX_RETRY) {
             s_retry++;
-            ESP_LOGI(TAG, "wifi retry %d/%d", s_retry, WIFI_MAX_RETRY);
+            ESP_LOGI(TAG, "wifi retry %d/%d (reason %u%s)", s_retry,
+                     WIFI_MAX_RETRY, reason, hint);
             esp_wifi_connect();
         } else {
             xEventGroupSetBits(s_ev, WIFI_FAIL_BIT);
