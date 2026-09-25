@@ -2,12 +2,11 @@
 # Applied on top of sdkconfig.defaults via
 #   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release"
 # so local menuconfig/sdkconfig setups are untouched.
+#
+# Artifacts (firmware.bin + version.txt) are consumed by the EXTERNAL PC
+# portal (host/portal/) over USB — there is no on-device auto-updater
+# (see docs/ota.md).
 
-# Pull updates from GitHub releases (see docs/ota.md §6). Local OTA_URL
-# stays empty: github mode takes precedence when the repo is set.
-CONFIG_QUORUMESP_OTA_CHECK=y
-CONFIG_QUORUMESP_OTA_GITHUB_REPO="ZkIsHere/QuorumESP"
-
-# First releases: server-auth TLS only if certs embedded (CI embeds none),
+# Server-auth TLS only if certs embedded (CI embeds none),
 # no client-cert requirement. Mutual auth returns with production certs.
 CONFIG_QUORUMESP_REQUIRE_CLIENT_CERT=n

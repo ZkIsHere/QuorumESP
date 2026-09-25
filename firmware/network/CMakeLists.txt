@@ -2,7 +2,7 @@
 # (git-ignored, never committed). They are baked into the binary as C string
 # literals generated at configure time — no objcopy symbol guessing.
 # Without certs the build still passes; TLS is refused at runtime (fail-closed).
-set(TLS_SRCS "ethernet.c" "tls.c" "wifi.c" "time_sync.c")
+set(TLS_SRCS "tls.c" "wifi.c" "time_sync.c")
 set(TLS_DEFS "")
 set(CERT_NAMES dev-ca.crt dev-server.crt dev-server.key)
 set(CERT_VARS qesp_dev_ca_crt qesp_dev_server_crt qesp_dev_server_key)

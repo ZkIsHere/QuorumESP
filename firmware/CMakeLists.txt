@@ -13,10 +13,8 @@ set(EXTRA_COMPONENT_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/quorum
     ${CMAKE_CURRENT_SOURCE_DIR}/network
     ${CMAKE_CURRENT_SOURCE_DIR}/config
-    ${CMAKE_CURRENT_SOURCE_DIR}/storage
     ${CMAKE_CURRENT_SOURCE_DIR}/watchdog
     ${CMAKE_CURRENT_SOURCE_DIR}/web
-    ${CMAKE_CURRENT_SOURCE_DIR}/diagnostics
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

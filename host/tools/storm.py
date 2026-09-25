@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Reconnect storm: N sequential full handshakes (PREINIT→STARTTLS→TLS→INIT→close)
 then a burst of concurrent half-open connections. Server must stay up and
-answer ECHO afterwards. Prints heap before/after via /api/status (needs web UI).
+answer INIT+ECHO afterwards. (Heap trend is read from the device web UI /
+serial status lines, not from here.)
 Usage: storm.py HOST PORT CLUSTER N
 """
 import socket
@@ -9,8 +10,6 @@ import ssl
 import struct
 import sys
 import threading
-import urllib.request
-import json
 
 host, port, cluster = sys.argv[1], int(sys.argv[2]), sys.argv[3].encode()
 n = int(sys.argv[4]) if len(sys.argv) > 4 else 50
@@ -61,16 +60,8 @@ def one_handshake(node):
     ts.close()
 
 
-def heap():
-    try:
-        with urllib.request.urlopen(f"http://{host}/api/status", timeout=8) as r:
-            return json.load(r)["firmware"]["heap_free"]
-    except Exception as e:
-        return f"n/a ({e})"
-
-
-h0 = heap()
-print(f"heap before: {h0}", flush=True)
+h0 = None
+print("storm start (heap: watch device serial/web in parallel)", flush=True)
 for i in range(n):
     one_handshake(100 + (i % 50))
     if (i + 1) % 10 == 0:
@@ -121,6 +112,4 @@ ts.sendall(frame(8, tlv(0, struct.pack("!I", 777))))
 mt, _ = read_frame(ts)
 assert mt == 9, f"ECHO failed mt={mt}"
 ts.close()
-h1 = heap()
-print(f"heap after: {h1}", flush=True)
 print("STORM: PASS", flush=True)
