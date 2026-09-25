@@ -54,7 +54,6 @@ static const char *STAG = "STATE";
 #define QESP_RX_SIZE QESP_INITIAL_MSG_SIZE
 #define QESP_TX_SIZE 2048
 #define QESP_SESSION_STACK 16384
-#define QESP_SESSION_STACK 16384
 
 typedef enum { ST_CONNECTED, ST_PREINIT_DONE, ST_ACTIVE, ST_CLOSED } st_t;
 
@@ -102,6 +101,15 @@ static int s_nsessions;
 
 static int64_t now_us(void) {
     return esp_timer_get_time();
+}
+
+/* Close without LWIP TIME_WAIT: with test churn (storm/probes) the 60s
+ * MSL TIME_WAIT per closed socket exhausts the small PCB pool and new
+ * SYNs get RST with zero logs (observed live). RST-on-close is fine here:
+ * every session is fail-closed and short-lived by design. */
+static void tune_servant_socket(int fd) {
+    struct linger lg = {.l_onoff = 1, .l_linger = 0};
+    setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
 }
 
 /* send exactly len bytes or fail */
@@ -780,16 +788,19 @@ static void session_task(void *arg) {
         r = on_frame(&s, rx, flen, QESP_RX_SIZE, tx, QESP_TX_SIZE, &txlen);
         if (r == UPGRADE_REQ) {
             /* require flag from Kconfig; cluster CN for the 2b check.
-             * Upgrade consumes the fd on failure — mark dead so tp_close
-             * (which closes a live fd, or a TLS session owning it) stays
-             * exactly-once. */
+             * The handshake blocks on the network: NEVER hold s_mux
+             * across it, or one slow peer stalls every session + accept.
+             * sess_t is task-local and slots are only taken at INIT, so
+             * re-taking the mutex after the handshake is safe. */
             int need_cc =
 #if CONFIG_QUORUMESP_REQUIRE_CLIENT_CERT
                 1;
 #else
                 0;
 #endif
+            xSemaphoreGive(s_mux);
             tp.tls = network_tls_upgrade(tp.fd, s.cluster, need_cc);
+            xSemaphoreTake(s_mux, portMAX_DELAY);
             if (tp.tls == NULL) {
                 ESP_LOGW(TAG, "TLS upgrade failed, closing");
                 tp.fd = -1; /* consumed by upgrade (all failure paths) */
@@ -890,16 +901,31 @@ static void server_task(void *arg) {
         struct timeval sel_tv = {.tv_sec = 5, .tv_usec = 0};
         int *pfd;
         int cfd;
+        /* Idle heartbeat: sessions + heap every ~60s so a silent stall
+         * (no accepts, no logs) is visible without a serial cable. */
+        static int idle_ticks = 0;
         quorumesp_watchdog_feed();
         FD_ZERO(&rfds);
         FD_SET(lfd, &rfds);
         if (select(lfd + 1, &rfds, NULL, NULL, &sel_tv) <= 0) {
+            if (++idle_ticks >= 12) {
+                int n;
+                idle_ticks = 0;
+                xSemaphoreTake(s_mux, portMAX_DELAY);
+                n = s_nsessions;
+                xSemaphoreGive(s_mux);
+                ESP_LOGI(TAG, "status: sessions=%d heap=%u", n,
+                         (unsigned)esp_get_free_heap_size());
+            }
             continue;
         }
+        idle_ticks = 0;
         cfd = accept(lfd, (struct sockaddr *)&peer, &plen);
         if (cfd < 0) {
+            ESP_LOGW(TAG, "accept failed (pcb/socket exhaustion?)");
             continue;
         }
+        tune_servant_socket(cfd);
         xSemaphoreTake(s_mux, portMAX_DELAY);
         nrun = s_nsessions;
         if (nrun < QESP_MAX_SESSIONS) {
@@ -918,6 +944,9 @@ static void server_task(void *arg) {
         }
         pfd = (int *)malloc(sizeof(int));
         if (pfd == NULL) {
+            xSemaphoreTake(s_mux, portMAX_DELAY);
+            s_nsessions--;
+            xSemaphoreGive(s_mux);
             close(cfd);
             continue;
         }
@@ -925,6 +954,9 @@ static void server_task(void *arg) {
         if (xTaskCreate(session_task, "qdev", QESP_SESSION_STACK,
                         pfd, 5, NULL) != pdPASS) {
             ESP_LOGE(TAG, "spawn session failed");
+            xSemaphoreTake(s_mux, portMAX_DELAY);
+            s_nsessions--;
+            xSemaphoreGive(s_mux);
             close(cfd);
             free(pfd);
             continue;
