@@ -25,7 +25,7 @@
 | Client không gửi cert (mutual) | đóng sau handshake | live (`no client certificate presented`) |
 | CN != cluster | đóng (verify callback) | live (`client CN mismatch` path; đúng CN pass) |
 | Cert hết hạn | handshake fail | live probe cert hết hạn (2d) |
-| Chain sai CA | handshake fail | unit (flags path); live chưa có CA lạ (TODO khi có PKI thật) |
+| Chain sai CA | handshake fail | **live 2026-09-25**: `rogue-cert-probe.py` với client cert do CA lạ ký (CN đúng `interop-test` để cô lập lỗi chain) → server mutual mode abort handshake `access_denied` (`ROGUE-CA PASS`). Control dương mutual mode không chạy được: dev PKI 2-ngày đã hết hạn sáng nay (CA + Cluster Cert `Not After Sep 25 07:45/08:07`) — bản thân việc hết hạn cũng là fail-closed đúng (qdevice kẹt `Connecting` ở mutual, vẫn `Connected` ở 2a) |
 | Time sai (1970) | chain fail-closed (với TIME_DATE on) | code + log cảnh báo wall-clock; live SNTP fail → mutual từ chối đúng |
 
 ## 3. Config / storage
