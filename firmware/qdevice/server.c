@@ -827,6 +827,23 @@ static void session_task(void *arg) {
             lms_refresh_others(-1, tx, QESP_TX_SIZE);
         }
         s.ff_idx = -1;
+        /* Last client left: drop cluster state like the reference frees
+         * algorithm_data, so a later cluster starts fresh (any algorithm). */
+        {
+            int any = 0, k;
+            for (k = 0; k < QESP_FF_MAX_CLIENTS; k++) {
+                if (s_ff.clients[k].used) {
+                    any = 1;
+                    break;
+                }
+            }
+            if (!any) {
+                s_algo = 0;
+                s_ff.nquorate = 0;
+                s_decided = 0;
+                s_phase = 0;
+            }
+        }
     }
     s_nsessions--;
     xSemaphoreGive(s_mux);
