@@ -75,17 +75,26 @@ def find_opt(body, opt):
     return None
 
 
+def err_code(body):
+    """INIT_REPLY always carries TLV 6; 0 = NO_ERROR (success)."""
+    raw = find_opt(body, 6)
+    if raw is None:
+        return None
+    if len(raw) == 2:
+        return struct.unpack("!H", raw)[0]
+    return struct.unpack("!I", raw)[0]
+
+
 a = tls_conn()
 mt, body = send_init(a, 9, 1)  # ffsplit decides the cluster algorithm
-assert mt == 4 and find_opt(body, 6) is None, f"conn A INIT failed: mt={mt}"
+assert mt == 4 and err_code(body) == 0, f"conn A INIT failed: mt={mt}"
 print("conn A ffsplit INIT_REPLY ok", flush=True)
 
 b = tls_conn()
 mt, body = send_init(b, 10, 3)  # lms must be refused
-err = find_opt(body, 6)
 assert mt == 4, f"conn B dropped (mt={mt}), expected error reply"
-assert err is not None and struct.unpack("!I", err)[0] == 16, (
-    f"expected ALGORITHM_DIFFERS(16), got mt={mt} err={err}"
+assert err_code(body) == 16, (
+    f"expected ALGORITHM_DIFFERS(16), got mt={mt} err={err_code(body)}"
 )
 print("conn B lms INIT_REPLY error=16 ALGORITHM_DIFFERS (transport kept)", flush=True)
 

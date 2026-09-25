@@ -46,7 +46,7 @@
 | Node quay lại (keep-active) | bên đang giữ KHÔNG mất vote | live (node1 về vẫn NACK) |
 | Lone survivor | ACK | live + unit |
 | Config lệch giữa client | WAIT_FOR_REPLY, không vote bừa | unit (`unstable`) |
-| Algorithm khác nhau | `ALGORITHM_DIFFERS` ở INIT | code; live chưa có 2 algo cùng lúc (cần 2 client khác algo — TODO) |
+| Algorithm khác nhau | `ALGORITHM_DIFFERS` ở INIT | **live 2026-09-25**: `mixed-algo-probe.py` — conn A ffsplit ok, conn B lms bị `INIT_REPLY error=16`, transport giữ, conn A ECHO vẫn đáp (`MIXED-ALGO: PASS`) |
 
 ## 5. OTA / update
 
@@ -69,8 +69,7 @@
 
 ## 7. Chưa làm (ghi nợ rõ ràng)
 
-- WDT timeout live proof (patch treo tạm thời → quan sát reset → revert).
-- Mixed-algorithm live (2 client khác algo cùng lúc).
 - Wi-Fi drop vật lý (tắt AP thật) + reconnect storm đếm được.
-- OTA retry/backoff + secure boot/ký image.
+- OTA retry/backoff live + secure boot/ký image.
 - Soak test nhiều ngày (RAM/session leak).
+- Chain sai CA live (cần PKI lạ — xuất client cert từ NSS DB hoặc CA mới).
