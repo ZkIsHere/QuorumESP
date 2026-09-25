@@ -62,8 +62,10 @@
 
 | Case | Expected | Evidence |
 |---|---|---|
-| Task WDT armed, feed mỗi vòng | reset khi task kẹt >10s | code (component + wire); **live proof CHƯA** (cần patch treo thử) |
-| Task session chết | accept loop + client khác sống, chip không treo toàn cục | không đo trực tiếp (TODO cùng WDT proof) |
+| Task kẹt (treo accept không feed) | WDT trigger | **live 2026-09-25**: patch treo tạm → `Task watchdog got triggered` lặp mỗi 10s đúng hẹn |
+| Vận hành bình thường | im lặng, không reset giả | live 100s sau revert: boot sạch, ACTIVE, không trigger |
+| Timeout phải reset (panic) | `CONFIG_ESP_TASK_WDT_PANIC=y` đã bật (trước đó chỉ warn) | config; vòng panic-reset full chưa quan sát trực tiếp (deferred — là code IDF chuẩn) |
+| Task session chết | accept loop + client khác sống, chip không treo toàn cục | thiết kế (task riêng + WDT riêng); chưa kill đơn lẻ live (TODO cùng soak) |
 
 ## 7. Chưa làm (ghi nợ rõ ràng)
 
