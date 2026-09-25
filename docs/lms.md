@@ -39,5 +39,8 @@ Chia sẻ bảng cluster với FFSplit (`ffsplit.h`); state LMS riêng
 
 - ✅ Decision core (`lms.c`) + 10 scenario test host (`quorum/test/`).
 - ✅ Đấu multi-algorithm vào `server.c`: 1 algorithm/cluster (INIT đầu
-  quyết; khác → `ALGORITHM_DIFFERS`), INIT_REPLY advertise cả hai.
-- ⏳ Interop live với client `algorithm: lms` (fake-node `--algo lms`).
+  quyết; khác → `ALGORITHM_DIFFERS`), INIT_REPLY advertise cả hai,
+  reset algorithm khi client cuối rời (đúng reference free algo-data).
+- ✅ Interop live (2026-09-25): `corosync-qdevice` thật với `algorithm: lms`
+  handshake + vote trực tiếp trong reply, `quorumtool` quorate 2/2
+  (A,V,NMW). Fake 2-client: newcomer rule phân thắng đúng.
