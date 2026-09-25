@@ -26,33 +26,37 @@ menu "QuorumESP"
         bool "Require + verify client certificate (mutual TLS)"
         default n
 
-    menuconfig QUORUMESP_WEB_ENABLE
-        bool "Enable web management UI (see docs/web.md)"
-        default n
+    menu "Web UI"
 
-    if QUORUMESP_WEB_ENABLE
+        menuconfig QUORUMESP_WEB_ENABLE
+            bool "Enable web management UI (see docs/web.md)"
+            default n
 
-        config QUORUMESP_WEB_PORT
-            int "Web UI listen port"
-            default 80
+        if QUORUMESP_WEB_ENABLE
 
-        config QUORUMESP_WEB_USER
-            string "Web UI username (empty = UI refuses to start)"
-            default ""
+            config QUORUMESP_WEB_PORT
+                int "Listen port"
+                default 80
 
-        config QUORUMESP_WEB_PASSWORD
-            string "Web UI password (menuconfig only — local sdkconfig, never committed)"
-            default ""
+            config QUORUMESP_WEB_USER
+                string "Username (empty = UI refuses to start)"
+                default ""
 
-        config QUORUMESP_WEB_LOGIN_MAX_FAIL
-            int "Failed logins before an IP goes silent"
-            default 5
+            config QUORUMESP_WEB_PASSWORD
+                string "Password (menuconfig only — local sdkconfig, never committed)"
+                default ""
 
-        config QUORUMESP_WEB_LOGIN_BLOCK_S
-            int "Silent-drop seconds after login rate limit"
-            default 60
+            config QUORUMESP_WEB_LOGIN_MAX_FAIL
+                int "Failed logins before an IP goes silent"
+                default 5
 
-    endif
+            config QUORUMESP_WEB_LOGIN_BLOCK_S
+                int "Silent-drop seconds after login rate limit"
+                default 60
+
+        endif
+
+    endmenu
 
     config QUORUMESP_DEBUG
         bool "Debug mode (verbose logs + extra diagnostics on web UI)"
