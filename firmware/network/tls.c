@@ -7,8 +7,11 @@
  * select a cert to send. Raw path sets OPTIONAL + ca_chain; enforcement =
  * post-handshake chain + CN check.
  *
- * FD ownership: upgrade-NULL always means fd dead (esp-tls delete closes it;
- * raw paths close explicitly). network_tls_close() closes exactly once.
+ * FD ownership: upgrade-NULL always means fd dead (the raw path closes
+ * explicitly; esp-tls server_session_create/delete NEVER touches the fd —
+ * verified in IDF v6.1 esp_tls_mbedtls.c, despite its docstring — so
+ * network_tls_close() closes it, exactly once, after delete).
+ * The caller must treat fd as dead after upgrade regardless of outcome.
  */
 #include "tls.h"
 
@@ -40,6 +43,7 @@ extern const char qesp_dev_server_key[];
 
 struct qesp_tls_session {
     int raw; /* 0 = esp-tls (2a), 1 = raw mbedTLS (2b mutual) */
+    int fd;  /* owned socket: esp-tls server delete never closes it */
     esp_tls_t *tls;
     mbedtls_ssl_context ssl;
     mbedtls_net_context net;
@@ -198,6 +202,7 @@ qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
     if (!require_client_cert) {
         /* Round 2a path (proven): esp-tls server session, no client auth. */
         s->raw = 0;
+        s->fd = fd;
         s->tls = esp_tls_init();
         if (s->tls == NULL) {
             close(fd);
@@ -205,8 +210,9 @@ qesp_tls_session_t *network_tls_upgrade(int fd, const char *expected_cn,
         }
         if (esp_tls_server_session_create(&s_cfg, fd, s->tls) != 0) {
             ESP_LOGW(TAG, "TLS handshake failed, closing");
-            esp_tls_server_session_delete(s->tls); /* consumes fd */
+            esp_tls_server_session_delete(s->tls); /* frees ctx, not fd */
             s->tls = NULL;
+            close(fd);
             goto fail_free;
         }
         ESP_LOGI(TAG, "TLS handshake done (server-only auth)");
@@ -374,6 +380,17 @@ void network_tls_close(qesp_tls_session_t *s) {
         return;
     }
     /* esp-tls delete owns the fd (production https_server usage). */
-    esp_tls_server_session_delete(s->tls);
+    /* IDF quirk: server_session_delete frees contexts but NOT the socket
+     * (only conn_delete closes, via mbedtls_net_free). Close it here —
+     * every TLS session leaked one LWIP socket before this (ENFILE after
+     * ~9 sessions, pool=10; observed live 2026-09-25). */
+    {
+        int fd = s->fd;
+        s->fd = -1;
+        esp_tls_server_session_delete(s->tls);
+        if (fd >= 0) {
+            close(fd);
+        }
+    }
     free(s);
 }
