@@ -36,6 +36,7 @@
 
 #include "ffsplit.h"
 #include "lms.h"
+#include "config.h"
 #include "msg.h"
 #include "tls.h"
 
@@ -870,7 +871,7 @@ static void server_task(void *arg) {
     setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(CONFIG_QUORUMESP_SERVER_PORT);
+    addr.sin_port = htons(quorumesp_config_get()->qdevice_port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(lfd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
         listen(lfd, 4) != 0) {
@@ -879,8 +880,8 @@ static void server_task(void *arg) {
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "qnetd-side listening on port %d (FFSplit votes)",
-             CONFIG_QUORUMESP_SERVER_PORT);
+    ESP_LOGI(TAG, "qnetd-side listening on port %d (FFSplit+LMS)",
+             (int)quorumesp_config_get()->qdevice_port);
     esp_task_wdt_add(NULL);
     for (;;) {
         struct sockaddr_in peer;

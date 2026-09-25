@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 
 #include "server.h"
+#include "config.h"
 #include "ota.h"
 #include "time_sync.h"
 #include "tls.h"
@@ -37,8 +38,11 @@ void app_main(void) {
 
     init_nvs();
 
+    if (quorumesp_config_init() != ESP_OK) {
+        ESP_LOGW(TAG, "config init failed, safe defaults in use");
+    }
     if (network_wifi_connect(NULL) != ESP_OK) {
-        ESP_LOGE(TAG, "wifi up failed — set creds via menuconfig, then rebuild");
+        ESP_LOGE(TAG, "wifi up failed — provision NVS (docs/provisioning.md)");
         return;
     }
     if (network_time_sync() != ESP_OK) {
@@ -55,6 +59,6 @@ void app_main(void) {
         return;
     }
     ESP_LOGI(TAG, "up. point your qdevice client at this IP, port %d",
-             CONFIG_QUORUMESP_SERVER_PORT);
+             (int)quorumesp_config_get()->qdevice_port);
     quorumesp_ota_confirm_task_start(); /* rollback guard (docs/ota.md) */
 }

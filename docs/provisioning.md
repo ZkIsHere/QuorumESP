@@ -15,6 +15,21 @@ Lookup order (`config_get_wifi`): NVS `qesp/ssid` → Kconfig fallback (dev).
 
 ## 2. Provision (USB, once per device)
 
+Namespace `qesp`, format version key `ver` (current v1). Full key table:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `ver` | u32 | format version (written by firmware) |
+| `host` | str | DHCP/hostname (default `quorumesp`) |
+| `wssid` / `wpass` | str | Wi-Fi credentials |
+| `netmode` | u8 | 0 DHCP, 1 static |
+| `ip`/`msk`/`gw`/`dns1`/`dns2` | u32 | static net, network byte order (set via Web UI later; CSV needs decimal conversion, not documented yet — DHCP for now) |
+| `devid` | str | stable device id (MAC-derived on first boot) |
+| `logl` | u8 | log level 0..5 |
+| `qdport` | u16 | qdevice listen port |
+
+Minimal Wi-Fi provisioning CSV (only what `nvs_partition_gen` handles well):
+
 In ESP-IDF PowerShell, any directory (use `%TEMP%`, never the repo —
 the CSV holds the real secret):
 

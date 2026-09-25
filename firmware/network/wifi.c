@@ -64,8 +64,38 @@ esp_err_t network_wifi_connect(uint32_t *out_ip_be) {
     if (esp_netif_init() != ESP_OK || esp_event_loop_create_default() != ESP_OK) {
         return ESP_FAIL;
     }
-    if (esp_netif_create_default_wifi_sta() == NULL) {
-        return ESP_FAIL;
+    {
+        esp_netif_t *sta = esp_netif_create_default_wifi_sta();
+        const qesp_config_t *ccfg = quorumesp_config_get();
+        if (sta == NULL) {
+            return ESP_FAIL;
+        }
+        if (ccfg != NULL) {
+            if (ccfg->hostname[0] != '\0') {
+                esp_netif_set_hostname(sta, ccfg->hostname);
+            }
+            if (ccfg->net_static && ccfg->ip != 0 && ccfg->mask != 0) {
+                esp_netif_ip_info_t info;
+                info.ip.addr = ccfg->ip;
+                info.netmask.addr = ccfg->mask;
+                info.gw.addr = ccfg->gw;
+                esp_netif_dhcpc_stop(sta);
+                esp_netif_set_ip_info(sta, &info);
+                if (ccfg->dns1 != 0) {
+                    esp_netif_dns_info_t dns;
+                    dns.ip.u_addr.ip4.addr = ccfg->dns1;
+                    dns.ip.type = ESP_IPADDR_TYPE_V4;
+                    esp_netif_set_dns_info(sta, ESP_NETIF_DNS_MAIN, &dns);
+                }
+                if (ccfg->dns2 != 0) {
+                    esp_netif_dns_info_t dns;
+                    dns.ip.u_addr.ip4.addr = ccfg->dns2;
+                    dns.ip.type = ESP_IPADDR_TYPE_V4;
+                    esp_netif_set_dns_info(sta, ESP_NETIF_DNS_BACKUP, &dns);
+                }
+                ESP_LOGI(TAG, "static IP from config");
+            }
+        }
     }
     {
         wifi_init_config_t icfg = WIFI_INIT_CONFIG_DEFAULT();
