@@ -22,9 +22,32 @@ menu "QuorumESP"
 
     endmenu
 
-    config QUORUMESP_REQUIRE_CLIENT_CERT
-        bool "Require + verify client certificate (mutual TLS)"
-        default n
+    menu "TLS certificates"
+
+        comment "Server identity + the CA used to verify clients (mutual TLS)"
+        comment "Each value is base64 of the DER bytes (single line, no PEM headers):"
+        comment "  openssl x509 -in cert.crt -outform der | base64 -w0"
+        comment "  openssl rsa -in key.key -outform der | base64 -w0   (or -outform der PKCS8)"
+        comment "Empty = fall back to firmware/certs_dev/* at build time (dev only)"
+        comment "Values live in local sdkconfig (git-ignored), never committed"
+
+        config QUORUMESP_TLS_SERVER_CRT_B64
+            string "Server certificate (base64 DER, presented to clients)"
+            default ""
+
+        config QUORUMESP_TLS_SERVER_KEY_B64
+            string "Server private key (base64 DER)"
+            default ""
+
+        config QUORUMESP_TLS_CLIENT_CA_B64
+            string "Client CA certificate (base64 DER, verifies clients in mutual mode)"
+            default ""
+
+        config QUORUMESP_REQUIRE_CLIENT_CERT
+            bool "Require + verify client certificate (mutual TLS)"
+            default n
+
+    endmenu
 
     menu "Web UI"
 

@@ -90,3 +90,7 @@ venv/
 firmware/**/run_*
 firmware/certs_dev/
 firmware/ota-test/
+# Local PKI authority (CA private key + minted certs). NEVER commit.
+host/pki/*
+# ...except the minting script itself (no secrets in it).
+!host/pki/mint-client.sh

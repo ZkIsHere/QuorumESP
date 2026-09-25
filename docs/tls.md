@@ -30,23 +30,35 @@ Lý do: cần `SSL_VERIFY_REQUIRED` + custom CN check theo cluster_name động
 
 ## 3. Cert dev (ephemeral, KHÔNG commit — `AGENTS.md` §9)
 
-Tạo trong WSL (`apt install openssl`), mỗi lần test tạo mới:
+Hai đường đưa cert vào firmware (Kconfig thắng file nhúng):
+
+**A. Menuconfig** (`QuorumESP → TLS certificates`, local sdkconfig,
+git-ignored): 3 ô — server cert, server key, client CA — mỗi ô là
+**base64 của DER, 1 dòng** (Kconfig string không mang được newline của
+PEM; thử `\n` đã chứng minh gãy — kconfig diễn giải escape rồi header
+sinh ra chuỗi rỗng):
 
 ```sh
-# CA dùng chung cho 1 vòng test
-openssl req -x509 -newkey rsa:2048 -nodes -keyout dev-ca.key -out dev-ca.crt \
-  -days 2 -subj "/CN=QuorumESP-Test-CA"
-# Server cert (CN bất kỳ, client không verify CN server ở vòng này — ghi rõ)
-openssl req -newkey rsa:2048 -nodes -keyout dev-server.key -out dev-server.csr \
-  -subj "/CN=QNetd Dev"
-openssl x509 -req -in dev-server.csr -CA dev-ca.crt -CAkey dev-ca.key \
-  -CAcreateserial -days 2 -out dev-server.crt
+openssl x509 -in server.crt -outform der | base64 -w0
+openssl rsa -in server.key -outform der | base64 -w0
 ```
 
-- `dev-server.crt` + `dev-server.key` → copy vào `firmware/certs_dev/`
-  (git-ignored). CMake EMBED_TXTFILES chỉ khi thư mục tồn tại; thiếu cert
-  thì build vẫn pass nhưng TLS bị từ chối lúc runtime (fail-closed).
-- `dev-ca.crt` → enroll vào NSS DB của qdevice WSL (mục 4).
+Firmware base64-decode lúc boot (lọc ký tự lạ, fail-closed nếu rác).
+Live-test 2026-09-25: giấu `certs_dev/`, nạp 3 blob qua sdkconfig →
+TLS handshake + session OK; mutual mode đá rogue cert như thường.
+
+**B. File nhúng** `firmware/certs_dev/` (git-ignored): `dev-ca.crt`,
+`dev-server.crt`, `dev-server.key`. CMake bake thành literal lúc
+configure (có `CMAKE_CONFIGURE_DEPENDS` — đổi PEM là tự rebuild, bài học
+xương máu: từng flash cert cũ vì cache không nhận file đổi).
+
+Thiếu cả hai → TLS unavailable, server plaintext-only (fail-closed).
+
+**Client cert từng node** (mutual mode cần): portal ngoài
+(`host/portal/` → Mint client cert, CN = tên cluster) ký bằng CA local
+(`host/pki/ca.key`, git-ignored, KHÔNG BAO GIỜ qua HTTP). Hoặc script
+`host/pki/mint-client.sh <CN>` + enroll NSS tay. CA key cũ mất nên
+2026-09-25 đã renew toàn bộ PKI dev (hạn 90 ngày).
 
 ## 4. Enroll client cho qdevice WSL (NSS DB, theo flow reference)
 

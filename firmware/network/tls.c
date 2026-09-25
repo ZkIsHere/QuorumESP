@@ -26,6 +26,7 @@
 #include "mbedtls/esp_debug.h"
 #endif
 #include "mbedtls/net_sockets.h"
+#include "mbedtls/base64.h"
 #include "mbedtls/pk.h"
 #include "mbedtls/ssl.h"
 #include "mbedtls/x509.h"
@@ -55,6 +56,48 @@ static esp_tls_cfg_server_t s_cfg;
 static int s_inited = 0;
 static int s_available = 0;
 
+/* Resolved cert material (Kconfig wins over embedded files). Kconfig
+ * holds base64(DER) (Kconfig strings cannot carry PEM newlines); decoded
+ * heap buffers live for the process lifetime (never freed). Embedded
+ * files are PEM literals. Lengths tracked per source (DER exact, PEM +1
+ * for the NUL the parser expects). */
+static const unsigned char *s_ca_der;
+static size_t s_ca_len;
+static const unsigned char *s_srv_crt;
+static size_t s_srv_crt_len;
+static const unsigned char *s_srv_key;
+static size_t s_srv_key_len;
+
+/* base64(DER) from Kconfig -> DER bytes. NULL on any doubt. */
+static unsigned char *decode_b64_der(const char *src, size_t *out_len) {
+    size_t slen = strlen(src);
+    size_t cap = slen / 4 * 3 + 4;
+    unsigned char *out = (unsigned char *)malloc(cap);
+    size_t olen = 0;
+    size_t i;
+    if (out == NULL) {
+        return NULL;
+    }
+    /* Kconfig single-line: reject anything with whitespace/newlines
+     * instead of silently decoding garbage. */
+    for (i = 0; i < slen; i++) {
+        char c = src[i];
+        int ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                 (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=';
+        if (!ok) {
+            free(out);
+            return NULL;
+        }
+    }
+    if (mbedtls_base64_decode(out, cap, &olen, (const unsigned char *)src,
+                               slen) != 0) {
+        free(out);
+        return NULL;
+    }
+    *out_len = olen;
+    return out;
+}
+
 /* Raw-mbedTLS mutual globals (2b). esp-tls never wires ca_chain server-side,
  * so the mutual path configures mbedTLS directly. */
 static mbedtls_x509_crt s_ca;
@@ -70,19 +113,59 @@ static void log_mbedtls(int rc, const char *what) {
 }
 
 esp_err_t network_tls_init(void) {
+    int use_kconf;
+    int have_embed;
     if (s_inited) {
         return s_available ? ESP_OK : ESP_ERR_NOT_FOUND;
     }
     s_inited = 1;
+    /* Source precedence: menuconfig PEMs (all three) > embedded dev files
+     * > TLS unavailable (fail-closed). */
+    use_kconf = CONFIG_QUORUMESP_TLS_CLIENT_CA_B64[0] != '\0' &&
+                CONFIG_QUORUMESP_TLS_SERVER_CRT_B64[0] != '\0' &&
+                CONFIG_QUORUMESP_TLS_SERVER_KEY_B64[0] != '\0';
 #ifdef HAS_DEV_CERTS
+    have_embed = 1;
+#else
+    have_embed = 0;
+#endif
+    if (use_kconf) {
+        s_ca_der = decode_b64_der(CONFIG_QUORUMESP_TLS_CLIENT_CA_B64, &s_ca_len);
+        s_srv_crt = decode_b64_der(CONFIG_QUORUMESP_TLS_SERVER_CRT_B64, &s_srv_crt_len);
+        s_srv_key = decode_b64_der(CONFIG_QUORUMESP_TLS_SERVER_KEY_B64, &s_srv_key_len);
+        if (s_ca_der == NULL || s_srv_crt == NULL || s_srv_key == NULL) {
+            ESP_LOGE(TAG, "menuconfig certs unreadable (need base64 DER) — "
+                          "TLS unavailable");
+            return ESP_ERR_INVALID_ARG;
+        }
+        ESP_LOGI(TAG, "TLS certs from menuconfig");
+#ifdef HAS_DEV_CERTS
+    } else if (have_embed) {
+        s_ca_der = (const unsigned char *)qesp_dev_ca_crt;
+        s_ca_len = strlen(qesp_dev_ca_crt) + 1;
+        s_srv_crt = (const unsigned char *)qesp_dev_server_crt;
+        s_srv_crt_len = strlen(qesp_dev_server_crt) + 1;
+        s_srv_key = (const unsigned char *)qesp_dev_server_key;
+        s_srv_key_len = strlen(qesp_dev_server_key) + 1;
+        ESP_LOGI(TAG, "TLS ready (dev certs embedded)");
+#else
+    } else if (have_embed) {
+        ESP_LOGE(TAG, "unreachable");
+        return ESP_ERR_NOT_FOUND;
+#endif
+    } else {
+        ESP_LOGW(TAG, "no TLS certs (menuconfig empty, no embedded files) — "
+                      "TLS unavailable (fail-closed)");
+        return ESP_ERR_NOT_FOUND;
+    }
     memset(&s_cfg, 0, sizeof(s_cfg));
-    s_cfg.servercert_buf = (const unsigned char *)qesp_dev_server_crt;
-    s_cfg.servercert_bytes = (unsigned int)strlen(qesp_dev_server_crt) + 1;
-    s_cfg.serverkey_buf = (const unsigned char *)qesp_dev_server_key;
-    s_cfg.serverkey_bytes = (unsigned int)strlen(qesp_dev_server_key) + 1;
+    s_cfg.servercert_buf = s_srv_crt;
+    s_cfg.servercert_bytes = (unsigned int)s_srv_crt_len;
+    s_cfg.serverkey_buf = s_srv_key;
+    s_cfg.serverkey_bytes = (unsigned int)s_srv_key_len;
     /* No cacert_buf in 2a: the server does not request client certificates. */
     s_available = 1;
-    ESP_LOGI(TAG, "TLS ready (dev certs embedded)");
+    ESP_LOGI(TAG, "TLS server identity ready");
 
     /* Raw mutual stack (2b): esp-tls never wires ca_chain server-side, so a
      * cert-requesting server needs direct mbedTLS config (4.x public API).
@@ -93,23 +176,18 @@ esp_err_t network_tls_init(void) {
         mbedtls_x509_crt_init(&s_server_crt);
         mbedtls_pk_init(&s_server_key);
         mbedtls_ssl_config_init(&s_conf_mutual);
-        rc = mbedtls_x509_crt_parse(&s_ca,
-                                    (const unsigned char *)qesp_dev_ca_crt,
-                                    strlen(qesp_dev_ca_crt) + 1);
+        rc = mbedtls_x509_crt_parse(&s_ca, s_ca_der, s_ca_len);
         if (rc != 0) {
             log_mbedtls(rc, "mutual ca parse");
             return ESP_OK; /* 2a still usable */
         }
-        rc = mbedtls_x509_crt_parse(&s_server_crt,
-                                    (const unsigned char *)qesp_dev_server_crt,
-                                    strlen(qesp_dev_server_crt) + 1);
+        rc = mbedtls_x509_crt_parse(&s_server_crt, s_srv_crt, s_srv_crt_len);
         if (rc != 0) {
             log_mbedtls(rc, "mutual server cert parse");
             return ESP_OK;
         }
-        rc = mbedtls_pk_parse_key(&s_server_key,
-                                  (const unsigned char *)qesp_dev_server_key,
-                                  strlen(qesp_dev_server_key) + 1, NULL, 0);
+        rc = mbedtls_pk_parse_key(&s_server_key, s_srv_key, s_srv_key_len,
+                                   NULL, 0);
         if (rc != 0) {
             log_mbedtls(rc, "mutual server key parse");
             return ESP_OK;
@@ -137,11 +215,6 @@ esp_err_t network_tls_init(void) {
 #endif
     }
     return ESP_OK;
-    return ESP_OK;
-#else
-    ESP_LOGW(TAG, "no dev certs embedded — TLS unavailable (fail-closed)");
-    return ESP_ERR_NOT_FOUND;
-#endif
 }
 
 int network_tls_available(void) {

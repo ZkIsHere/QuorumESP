@@ -13,6 +13,11 @@ foreach(f ${CERT_NAMES})
   endif()
 endforeach()
 if(HAVE_ALL_CERTS)
+  # Re-run configure when a PEM changes (content is baked in at configure).
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../certs_dev/dev-ca.crt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../certs_dev/dev-server.crt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../certs_dev/dev-server.key")
   set(GEN_C "${CMAKE_CURRENT_BINARY_DIR}/certs_embed.c")
   file(WRITE "${GEN_C}" "/* Generated: embedded dev TLS certs. DO NOT EDIT. */\n")
   list(LENGTH CERT_NAMES _n)

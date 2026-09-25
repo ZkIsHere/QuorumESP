@@ -25,10 +25,51 @@ import urllib.request
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 HERE = os.path.dirname(os.path.abspath(__file__))
+PKI_DIR = os.path.join(os.path.dirname(HERE), "pki")
 IDF_PATH = os.environ.get("IDF_PATH", "")
 JOBS = {}
 JOB_SEQ = [0]
 JOBS_LOCK = threading.Lock()
+
+# Minting shells to openssl. Windows rarely has it; WSL does on dev PCs.
+OPENSSL = ["wsl", "openssl"] if sys.platform == "win32" else ["openssl"]
+
+
+def wsl_path(p):
+    if sys.platform == "win32" and len(p) > 2 and p[1] == ":":
+        return "/mnt/" + p[0].lower() + p[2:].replace("\\", "/")
+    return p
+
+
+def mint_client(cn):
+    """Sign a client cert (CN) with the local dev CA. Returns (crt, key)
+    filenames inside PKI_DIR. The CA private key never leaves the PC
+    (and is never served over HTTP)."""
+    if not re.match(r"^[A-Za-z0-9._-]{1,64}$", cn or ""):
+        raise ValueError("bad CN (1-64 chars: A-Z a-z 0-9 . _ -)")
+    os.makedirs(PKI_DIR, exist_ok=True)
+    ca_crt = os.path.join(PKI_DIR, "ca.crt")
+    ca_key = os.path.join(PKI_DIR, "ca.key")
+    if not (os.path.isfile(ca_crt) and os.path.isfile(ca_key)):
+        raise FileNotFoundError("no local CA (host/pki/ca.crt + ca.key)")
+    crt = os.path.join(PKI_DIR, f"client-{cn}.crt")
+    key = os.path.join(PKI_DIR, f"client-{cn}.key")
+    csr = os.path.join(PKI_DIR, f"client-{cn}.csr")
+    w = wsl_path
+    subprocess.run(OPENSSL + ["req", "-newkey", "rsa:2048", "-nodes",
+                              "-keyout", w(key), "-out", w(csr),
+                              "-subj", f"/CN={cn}"],
+                   check=True, capture_output=True, timeout=60)
+    subprocess.run(OPENSSL + ["x509", "-req", "-in", w(csr),
+                              "-CA", w(ca_crt), "-CAkey", w(ca_key),
+                              "-CAcreateserial", "-days", "90",
+                              "-out", w(crt)],
+                   check=True, capture_output=True, timeout=60)
+    try:
+        os.remove(csr)
+    except OSError:
+        pass
+    return f"client-{cn}.crt", f"client-{cn}.key"
 
 
 def run_job(name, cmd, cwd=None):
@@ -177,6 +218,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             port = (q.get("port") or [""])[0]
             self.send_json({"version": read_version(port)})
+        elif path.startswith("/pki/"):
+            # Download minted CLIENT certs only. CA key / serials: never.
+            name = path.rsplit("/", 1)[-1]
+            if not re.match(r"^client-[A-Za-z0-9._-]{1,64}\.(crt|key)$", name):
+                self.send_error(403)
+                return
+            full = os.path.join(PKI_DIR, name)
+            if not os.path.isfile(full):
+                self.send_error(404)
+                return
+            with open(full, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:
             self.send_error(404)
 
@@ -217,6 +275,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                              "--chip", "esp32", "-p", port,
                                              "write_flash", "0x20000", dst])
             self.send_json({"job": jid})
+        elif path == "/api/mint":
+            body = self.read_json() or {}
+            cn = (body.get("cn") or "").strip()
+            try:
+                crt, key = mint_client(cn)
+            except Exception as e:  # noqa: BLE001 - surfaced to UI
+                self.send_json({"error": str(e)}, 400)
+                return
+            self.send_json({"crt": "/pki/" + crt, "key": "/pki/" + key})
         elif path == "/api/provision":
             body = self.read_json() or {}
             port, ssid, password = (body.get("port") or "", body.get("ssid") or "",

@@ -20,6 +20,12 @@
 <p>SSID <input id="ssid"> Pass <input id="pass" type="password">
 <button onclick="provision()">provision</button></p>
 
+<h2>4. Mint client certificate (mutual TLS)</h2>
+<p>Signed by the local dev CA (90 days). CN should equal the cluster name
+the node joins. The CA private key never leaves this PC.</p>
+<p>CN <input id="cn" value="interop-test">
+<button onclick="mint()">mint</button> <span id="mintout"></span></p>
+
 <h2>Job</h2>
 <pre id="job">idle</pre>
 
@@ -70,6 +76,11 @@ async function readVer(){
   document.getElementById('ver').textContent='reading...';
   let d=await jget('/api/version?port='+encodeURIComponent(port));
   document.getElementById('ver').textContent=d.version||'?';
+}
+async function mint(){
+  let d=await jpost('/api/mint',{cn:document.getElementById('cn').value});
+  document.getElementById('mintout').innerHTML=d.error?('error: '+d.error):
+    ('<a href="'+d.crt+'">client.crt</a> <a href="'+d.key+'">client.key</a>');
 }
 loadPorts();loadRel();
 </script>
