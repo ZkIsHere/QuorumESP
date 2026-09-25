@@ -165,6 +165,14 @@ esp_err_t quorumesp_config_get_wifi(char *ssid, size_t ssid_cap,
     put_str(ssid, ssid_cap, s_cfg.wifi_ssid);
     put_str(pass, pass_cap, s_cfg.wifi_pass);
     ESP_LOGI(TAG, "wifi creds from NVS");
+    /* NVS wins over Kconfig by design; warn when they disagree so a stale
+     * NVS entry can't silently shadow a fresh menuconfig (debugging trap). */
+    if (CONFIG_QUORUMESP_WIFI_SSID[0] != '\0' &&
+        strcmp(CONFIG_QUORUMESP_WIFI_SSID, s_cfg.wifi_ssid) != 0) {
+        ESP_LOGW(TAG, "Kconfig SSID '%s' ignored: NVS '%s' takes precedence "
+                      "(reprovision NVS to change)",
+                 CONFIG_QUORUMESP_WIFI_SSID, s_cfg.wifi_ssid);
+    }
     return ESP_OK;
 }
 
