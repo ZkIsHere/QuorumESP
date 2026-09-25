@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <netinet/in.h>
@@ -922,7 +923,8 @@ static void server_task(void *arg) {
         idle_ticks = 0;
         cfd = accept(lfd, (struct sockaddr *)&peer, &plen);
         if (cfd < 0) {
-            ESP_LOGW(TAG, "accept failed (pcb/socket exhaustion?)");
+            ESP_LOGW(TAG, "accept failed errno=%d heap=%u (pcb/socket exhaustion?)",
+                     errno, (unsigned)esp_get_free_heap_size());
             continue;
         }
         tune_servant_socket(cfd);
