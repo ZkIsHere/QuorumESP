@@ -20,11 +20,14 @@ node_id = int(sys.argv[4])
 cfg_nodes = [int(x) for x in sys.argv[5].split(",")]
 memb_nodes = [int(x) for x in sys.argv[6].split(",")]
 cert = key = None
+algo = 1  # 1 ffsplit, 3 lms
 for i, a in enumerate(sys.argv):
     if a == "--cert":
         cert = sys.argv[i + 1]
     if a == "--key":
         key = sys.argv[i + 1]
+    if a == "--algo":
+        algo = {"ffsplit": 1, "lms": 3}[sys.argv[i + 1]]
 
 seq = [0]
 
@@ -86,7 +89,7 @@ ts.sendall(
         + tlv(4, struct.pack("!18H", *range(18)))
         + tlv(5, struct.pack("!24H", *range(24)))
         + tlv(9, struct.pack("!I", node_id))
-        + tlv(11, struct.pack("!H", 1))
+        + tlv(11, struct.pack("!H", algo))
         + tlv(12, struct.pack("!I", 8000))
         + tlv(21, bytes([1]) + struct.pack("!I", 0))
         + tlv(13, ring(node_id, 100)),

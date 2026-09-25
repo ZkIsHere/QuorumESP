@@ -1,11 +1,14 @@
-/* qnetd-side TCP server: multi-client FFSplit (reference-faithful).
+/* qnetd-side TCP server: multi-client FFSplit + LMS (reference-faithful).
  *
- * Roles mirror qnetd + qnetd-algo-ffsplit.c:
- * - One FreeRTOS task per client (max QESP_MAX_SESSIONS); one accept task.
- * - Replies carry decision STATUS (ASK_LATER/WAIT_FOR_REPLY/NO_CHANGE);
- *   real votes travel by server-pushed VOTE_INFO, NACKs before ACKs,
- *   sequenced by VOTE_INFO_REPLY matching (like the reference).
- * - ASK_FOR_VOTE is unsupported under FFSplit (reference behavior).
+ * Roles mirror qnetd + qnetd-algo-{ffsplit,lms}.c, one algorithm per cluster
+ * (first INIT decides; mismatch refused with ALGORITHM_DIFFERS):
+ * - FFSplit: replies carry decision STATUS; votes travel by server-pushed
+ *   VOTE_INFO, NACKs before ACKs, sequenced by VOTE_INFO_REPLY matching.
+ *   ASK_FOR_VOTE is unsupported (reference behavior).
+ * - LMS: votes ride IN replies (membership/quorum/ask_for_vote); no push
+ *   sequencing. Waiting clients are recomputed on every cluster event
+ *   (timer-equivalent for the reference algo timer). Heuristics changes
+ *   are ignored (reference).
  * - Single-cluster dev scope (8 vote-table slots / 32 nodes, 2 concurrent
  *   sessions on classic ESP32 RAM): a second cluster_name is refused.
  * - Advertised max message 32768 (reference minimum); bigger frames are
@@ -32,6 +35,7 @@
 #include "freertos/task.h"
 
 #include "ffsplit.h"
+#include "lms.h"
 #include "msg.h"
 #include "tls.h"
 
@@ -85,10 +89,12 @@ static SemaphoreHandle_t s_mux;
 static qesp_ff_cluster_t s_ff;
 static char s_cluster[64];
 static int s_have_cluster;
-static int s_decided; /* last decide() outcome */
+static uint16_t s_algo; /* cluster algorithm, 0 = unset (first INIT decides) */
+static int s_decided; /* last FFSplit decide() outcome */
 /* Per-slot push state: 0 none, 1 nack-due, 2 ack-due, 3 nack-pending, 4 ack-pending */
 static uint8_t s_st[QESP_FF_MAX_CLIENTS];
 static uint32_t s_seq[QESP_FF_MAX_CLIENTS];
+static uint8_t s_lms_last[QESP_FF_MAX_CLIENTS]; /* saved LMS votes */
 static tp_t s_tp[QESP_FF_MAX_CLIENTS];
 static int s_phase; /* 0 idle, 1 sending nacks, 2 sending acks */
 static int s_nsessions;
@@ -124,14 +130,14 @@ static size_t err_reply(uint8_t *tx, size_t cap, uint16_t code, const qesp_msg_t
 }
 
 /* Build INIT_REPLY (also used with error codes, like the reference).
- * Advertises ONLY what this firmware implements (FFSplit for now). */
+ * Advertises what this firmware implements (FFSplit + LMS). */
 static size_t init_reply(uint8_t *tx, size_t cap, const qesp_msg_t *m, uint16_t code) {
-    static const uint16_t algos[] = {QESP_ALGO_FFSPLIT};
+    static const uint16_t algos[] = {QESP_ALGO_FFSPLIT, QESP_ALGO_LMS};
     qesp_buf_t b;
     qesp_buf_init(&b, tx, cap);
     if (qesp_msg_init_reply(&b, m->has_seq, m->seq, code,
                             QESP_RX_SIZE, QESP_TX_SIZE,
-                            algos, 1) != QESP_OK) {
+                            algos, 2) != QESP_OK) {
         return 0;
     }
     return b.len;
@@ -241,6 +247,33 @@ static void on_vote_info_reply(int slot, uint32_t seq, uint8_t *scratch, size_t 
     }
 }
 
+/* LMS timer-equivalent: the reference re-runs waiting clients on a timer;
+ * here every cluster event re-runs them synchronously (same effect: no
+ * waiter stalls forever while peers keep reporting). Decided votes are
+ * pushed via VOTE_INFO. Mutex held. */
+static void lms_refresh_others(int exclude, uint8_t *scratch, size_t cap) {
+    int i;
+    if (s_algo != QESP_ALGO_LMS) {
+        return;
+    }
+    for (i = 0; i < QESP_FF_MAX_CLIENTS; i++) {
+        uint8_t v;
+        if (!s_ff.clients[i].used || i == exclude) {
+            continue;
+        }
+        if (s_lms_last[i] != QESP_VOTE_WAIT_FOR_REPLY) {
+            continue;
+        }
+        v = qesp_lms_decide(&s_ff, i, s_lms_last);
+        if (v == QESP_VOTE_ACK || v == QESP_VOTE_NACK) {
+            if (push_vote(i, v, scratch, cap)) {
+                ESP_LOGI(TAG, "LMS refresh pushed node=%lu vote=%u",
+                         (unsigned long)s_ff.clients[i].node_id, v);
+            }
+        }
+    }
+}
+
 /* Handle one validated frame. Returns: >0 reply bytes, 0 no reply, -1 drop.
  * Sends for OTHER sessions happen inside (mutex held by caller). */
 static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
@@ -318,8 +351,15 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
             *txlen = init_reply(tx, txcap, &m, QESP_E_DOESNT_CONTAIN_REQUIRED_OPTION);
             return *txlen > 0 ? 0 : -1;
         }
-        if (!m.has_algorithm || m.algorithm != QESP_ALGO_FFSPLIT) {
+        if (!m.has_algorithm ||
+            (m.algorithm != QESP_ALGO_FFSPLIT && m.algorithm != QESP_ALGO_LMS)) {
             *txlen = init_reply(tx, txcap, &m, QESP_E_UNSUPPORTED_DECISION_ALGORITHM);
+            return *txlen > 0 ? 0 : -1;
+        }
+        if (s_algo != 0 && s_algo != m.algorithm) {
+            /* One algorithm per cluster (reference: ALGORITHM_DIFFERS). */
+            *txlen = init_reply(tx, txcap, &m,
+                                QESP_E_ALGORITHM_DIFFERS_FROM_OTHER_NODES);
             return *txlen > 0 ? 0 : -1;
         }
         if (!m.has_heartbeat ||
@@ -344,7 +384,21 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
             s->ff_idx = idx;
             s_ff.clients[idx].tb_mode = m.tie_mode;
             s_ff.clients[idx].tb_node = m.tie_node;
+            s_ff.clients[idx].heur = QESP_HEUR_UNDEFINED;
             s_tp[idx] = s->tp_ref;
+            /* Fresh slot state (slots are reused across connections). */
+            s_st[idx] = 0;
+            s_seq[idx] = 0;
+            s_lms_last[idx] = QESP_LMS_NEW;
+            s->has_config = 0;
+            s->has_memb = 0;
+            s->heur = QESP_HEUR_UNDEFINED;
+            s->kap = 0;
+            if (s_algo == 0) {
+                s_algo = m.algorithm;
+                ESP_LOGI(TAG, "cluster algorithm: %s",
+                         s_algo == QESP_ALGO_LMS ? "lms" : "ffsplit");
+            }
         }
         s->st = ST_ACTIVE;
         ESP_LOGI(STAG, "PREINIT_DONE -> ACTIVE node=%lu algo=%u hb=%lu",
@@ -376,6 +430,64 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
             return *txlen > 0 ? 0 : -1;
         }
         cl = &s_ff.clients[s->ff_idx];
+        if (s_algo == QESP_ALGO_LMS) {
+            /* LMS: votes ride IN replies (no push sequencing). Config lists
+             * are counted, never decided (reference). */
+            uint8_t vote;
+            if (m.list_type == QESP_NL_QUORUM) {
+                vote = qesp_lms_decide(&s_ff, s->ff_idx, s_lms_last);
+            } else if (m.list_type == QESP_NL_MEMBERSHIP) {
+                if (m.n_nodes == 0) {
+                    *txlen = err_reply(tx, txcap,
+                                       QESP_E_INVALID_MEMBERSHIP_NODE_LIST, &m);
+                    return *txlen > 0 ? 0 : -1;
+                }
+                {
+                    int self = 0;
+                    for (k = 0; k < m.n_nodes; k++) {
+                        if (m.nodes[k].node_id == s->node) {
+                            self = 1;
+                            break;
+                        }
+                    }
+                    if (!self) {
+                        *txlen = err_reply(tx, txcap,
+                                           QESP_E_INVALID_MEMBERSHIP_NODE_LIST,
+                                           &m);
+                        return *txlen > 0 ? 0 : -1;
+                    }
+                }
+                for (k = 0; k < m.n_nodes; k++) {
+                    cl->memb[k] = m.nodes[k].node_id;
+                }
+                cl->nmemb = m.n_nodes;
+                if (m.has_ring) {
+                    cl->ring_node = m.ring_node;
+                    cl->ring_seq = m.ring_seq;
+                    cl->has_ring = 1;
+                    rn = m.ring_node;
+                    rs = m.ring_seq;
+                    s->last_rn = rn;
+                    s->last_rs = rs;
+                }
+                if (m.has_heur) {
+                    cl->heur = m.heur;
+                    s->heur = m.heur;
+                }
+                s->has_memb = 1;
+                vote = qesp_lms_decide(&s_ff, s->ff_idx, s_lms_last);
+                lms_refresh_others(s->ff_idx, tx, txcap);
+            } else {
+                vote = QESP_VOTE_NO_CHANGE;
+            }
+            qesp_buf_init(&b, tx, txcap);
+            if (qesp_msg_node_list_reply(&b, m.seq, m.list_type, rn, rs,
+                                         vote) != QESP_OK) {
+                return -1;
+            }
+            *txlen = b.len;
+            return 0;
+        }
         if (m.list_type == QESP_NL_QUORUM) {
             /* Informative only (reference): no state change. */
             status = QESP_VOTE_NO_CHANGE;
@@ -446,11 +558,29 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
         *txlen = b.len;
         return 0;
     }
-    case QESP_MSG_ASK_FOR_VOTE:
-        /* FFSplit has no ask-for-vote (reference: unsupported message). */
-        *txlen = err_reply(tx, txcap,
-                           QESP_E_UNSUPPORTED_DECISION_ALGORITHM_MESSAGE, &m);
-        return *txlen > 0 ? 0 : -1;
+    case QESP_MSG_ASK_FOR_VOTE: {
+        qesp_buf_t b;
+        uint8_t vote;
+        if (!m.has_seq || s->ff_idx < 0) {
+            *txlen = err_reply(tx, txcap, QESP_E_DOESNT_CONTAIN_REQUIRED_OPTION, &m);
+            return *txlen > 0 ? 0 : -1;
+        }
+        if (s_algo != QESP_ALGO_LMS) {
+            /* FFSplit has no ask-for-vote (reference: unsupported message). */
+            *txlen = err_reply(tx, txcap,
+                               QESP_E_UNSUPPORTED_DECISION_ALGORITHM_MESSAGE, &m);
+            return *txlen > 0 ? 0 : -1;
+        }
+        vote = qesp_lms_decide(&s_ff, s->ff_idx, s_lms_last);
+        lms_refresh_others(s->ff_idx, tx, txcap);
+        qesp_buf_init(&b, tx, txcap);
+        if (qesp_msg_ask_for_vote_reply(&b, m.seq, s->last_rn, s->last_rs,
+                                        vote) != QESP_OK) {
+            return -1;
+        }
+        *txlen = b.len;
+        return 0;
+    }
     case QESP_MSG_HEURISTICS_CHANGE: {
         qesp_buf_t b;
         uint8_t status;
@@ -460,13 +590,18 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
             *txlen = err_reply(tx, txcap, QESP_E_DOESNT_CONTAIN_REQUIRED_OPTION, &m);
             return *txlen > 0 ? 0 : -1;
         }
-        s_ff.clients[s->ff_idx].heur = m.heur;
-        s->heur = m.heur;
-        if (!s->has_config || !s->has_memb) {
-            status = QESP_VOTE_ASK_LATER;
+        if (s_algo == QESP_ALGO_LMS) {
+            /* LMS ignores heuristics changes (reference): no state change. */
+            status = QESP_VOTE_NO_CHANGE;
         } else {
-            recompute(tx, txcap);
-            status = s_decided ? QESP_VOTE_NO_CHANGE : QESP_VOTE_WAIT_FOR_REPLY;
+            s_ff.clients[s->ff_idx].heur = m.heur;
+            s->heur = m.heur;
+            if (!s->has_config || !s->has_memb) {
+                status = QESP_VOTE_ASK_LATER;
+            } else {
+                recompute(tx, txcap);
+                status = s_decided ? QESP_VOTE_NO_CHANGE : QESP_VOTE_WAIT_FOR_REPLY;
+            }
         }
         qesp_buf_init(&b, tx, txcap);
         if (qesp_msg_heuristics_change_reply(&b, m.seq, s->last_rn, s->last_rs,
@@ -491,7 +626,9 @@ static int on_frame(sess_t *s, const uint8_t *f, size_t flen, size_t rxcap,
         return 0;
     }
     case QESP_MSG_VOTE_INFO_REPLY:
-        if (s->ff_idx >= 0 && m.has_seq) {
+        /* FFSplit: advance the NACK->ACK push sequencing. LMS needs no
+         * tracking (votes ride in replies; reference is a no-op here). */
+        if (s_algo == QESP_ALGO_FFSPLIT && s->ff_idx >= 0 && m.has_seq) {
             on_vote_info_reply(s->ff_idx, m.seq, tx, txcap);
         }
         return 1; /* ack, nothing to send back */
@@ -681,7 +818,14 @@ static void session_task(void *arg) {
         qesp_ff_remove(&s_ff, s.ff_idx);
         s_tp[s.ff_idx].fd = -1;
         s_tp[s.ff_idx].tls = NULL;
-        recompute(tx, QESP_TX_SIZE);
+        s_lms_last[s.ff_idx] = QESP_LMS_NEW;
+        if (s_algo == QESP_ALGO_FFSPLIT) {
+            recompute(tx, QESP_TX_SIZE);
+        } else if (s_algo == QESP_ALGO_LMS) {
+            /* Reference runs no recompute here; refresh waiters instead
+             * (timer-equivalent, see lms_refresh_others). */
+            lms_refresh_others(-1, tx, QESP_TX_SIZE);
+        }
         s.ff_idx = -1;
     }
     s_nsessions--;
