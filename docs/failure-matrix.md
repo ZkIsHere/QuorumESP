@@ -54,7 +54,7 @@
 |---|---|---|
 | Update tốt | tải → reboot → confirm 60s | live (v0.2.x nhiều vòng) |
 | Image crash trước confirm | rollback về bản cũ ở reboot tới | live (`bad-ota-test` → về bản tốt) |
-| Server serve bản hỏng liên tục | quá 3 lần thì bỏ qua tới khi có version khác (NVS fail-memory) | code + unit test; live-deferred (cần server serve bản hỏng cố ý) |
+| Server serve bản hỏng liên tục | quá 3 lần thì bỏ qua tới khi có version khác (NVS fail-memory) | **live 2026-09-25**: release `v0.0.0-ota-fail-test2` chứa image `abort()` → đúng 3 vòng download/reboot/crash/rollback rồi `failed 3 times before, skipping`, server lên ổn định (serial log). Download hỏng (404) cũng tính vào counter. Release test đã xóa, v0.2.4 lại là Latest |
 | Mất mạng giữa download | giữ image cũ, thử lại reboot sau | code path; live chưa kéo dây mạng giữa chừng (TODO) |
 | USB flash đè ota_0 | mất khả năng rollback (đúng semantics IDF) | live (bài học, đã ghi docs/ota.md) |
 
