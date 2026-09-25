@@ -32,8 +32,13 @@ static void str_trim(char *s) {
  * newest release assets (esp_http_client follows redirects). The repo must
  * be public, or provide a token (not implemented — see docs/ota.md). */
 static void ota_base(char *out, size_t cap) {
+#ifdef CONFIG_QUORUMESP_OTA_GITHUB_REPO
     snprintf(out, cap, "https://github.com/%s/releases/latest/download",
              CONFIG_QUORUMESP_OTA_GITHUB_REPO);
+#else
+    /* OTA_CHECK off: no channel configured (see Kconfig depends). */
+    out[0] = '\0';
+#endif
 }
 
 /* GET <base>/version.txt into out (NUL-terminated). GitHub = HTTPS.
@@ -169,6 +174,10 @@ esp_err_t quorumesp_ota_check_and_update(void) {
     esp_err_t r;
 
     ota_base(base, sizeof(base));
+    if (base[0] == '\0') {
+        ESP_LOGI(TAG, "no update channel configured, skipping check");
+        return ESP_OK;
+    }
     running = esp_app_get_description();
     ESP_LOGI(TAG, "running version %s, checking %s", running->version, base);
     if (fetch_version(base, server_ver, sizeof(server_ver)) != ESP_OK) {
