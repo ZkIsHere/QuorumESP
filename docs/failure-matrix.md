@@ -8,13 +8,14 @@
 | Case | Expected (fail-closed) | Evidence |
 |---|---|---|
 | TCP peer đóng đột ngột | invalidate session, recompute vote cho phần còn lại | live nhiều lần (`client session end`, recompute log) |
+| TLS session rò socket (LWIP pool 10) | đóng session phải giải phóng socket, accept tiếp tục | **live 2026-09-25 (bug thật)**: sau ~9 session TLS, `accept failed errno=23 (ENFILE)` vĩnh viễn, `sessions=0 socks=0 heap` ổn định. Nguyên nhân: `esp_tls_server_session_delete` của IDF KHÔNG đóng fd (chỉ `conn_delete` mới đóng). Fix: `network_tls_close` tự `close(fd)` + fail path. Chứng minh: storm 50 PASS sau fix |
 | Mất Wi-Fi (AP/client rớt) | DPD hb×1.5 đóng session; client reconnect khi mạng về; **device retry vô hạn sau boot** (`s_boot_done`) | live (`dead peer, closing` khi kill corosync); reconnect-vô-hạn: code + build OK, **live-deferred (board brownout nguồn 2026-09-25, xem docs/hardware.md §7)** |
 | ESP32 reboot / mất nguồn | client reconnect từ PREINIT; NVS/config persistent | live (reboot EN + brownout, `config v1 id=` giữ nguyên) |
 | ESP32 brownout (nguồn yếu) | reset, boot lại sạch (không half-state) | live (đầu project, fix bằng nguồn ngoài) |
 | Oversize frame (>32K) | drain + `MESSAGE_TOO_LONG`, giữ kết nối | code + drain path; live 8K garbage → `ERROR_DECODING_MSG` + alive (oversize-probe) |
 | Malformed TLV/header | reject + error reply, giữ kết nối; framing sai thì drop | host tests + live (`framing reject`, `decode failed`) |
 | Cluster name lạ giữa chừng | đóng kết nối (single-cluster scope) | live (probe cluster `ab` bị refuse đúng) |
-| Reconnect storm | mỗi session độc lập, table tối đa 2 (+8 vote slots), đầy thì refuse log rõ | code; chưa đo tải (TODO soak) |
+| Reconnect storm | mỗi session độc lập, table tối đa 2 (+8 vote slots), đầy thì refuse log rõ | **live 2026-09-25**: `storm.py` 50 handshake TLS liên tiếp + burst 20 concurrent + INIT/ECHO cuối → `STORM: PASS`, 0 lỗi (qdevice tắt trước để khỏi tranh slot) |
 
 ## 2. TLS / auth
 
@@ -69,7 +70,6 @@
 
 ## 7. Chưa làm (ghi nợ rõ ràng)
 
-- Wi-Fi drop vật lý (tắt AP thật) + reconnect storm đếm được.
-- OTA retry/backoff live + secure boot/ký image.
-- Soak test nhiều ngày (RAM/session leak).
+- Wi-Fi drop vật lý (tắt AP thật) — user không muốn đụng router chính; hotspot path bỏ dở.
+- Soak test dài (ngày): khung đã có (`status:` mỗi 60s + qdevice Connected), chưa chạy.
 - Chain sai CA live (cần PKI lạ — xuất client cert từ NSS DB hoặc CA mới).

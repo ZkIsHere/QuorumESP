@@ -93,7 +93,7 @@ ths = [threading.Thread(target=half_open, args=(i,)) for i in range(20)]
 [t.join() for t in ths]
 print(f"concurrent burst done, transport errors: {len(errs)}", flush=True)
 
-# server still alive? full handshake + ECHO
+# server still alive? full handshake + INIT + ECHO (ECHO needs ACTIVE)
 s = socket.create_connection((host, port), timeout=10)
 s.sendall(frame(0, tlv(0, struct.pack("!I", 1)) + tlv(1, cluster)))
 assert read_frame(s)[0] == 1
@@ -102,6 +102,21 @@ ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 ts = ctx.wrap_socket(s, server_hostname="Qnetd Server")
+ts.sendall(
+    frame(
+        3,
+        tlv(0, struct.pack("!I", 3))
+        + tlv(4, struct.pack("!18H", *range(18)))
+        + tlv(5, struct.pack("!24H", *range(24)))
+        + tlv(9, struct.pack("!I", 200))
+        + tlv(11, struct.pack("!H", 1))
+        + tlv(12, struct.pack("!I", 8000))
+        + tlv(21, bytes([1]) + struct.pack("!I", 0))
+        + tlv(13, struct.pack("!I", 200) + struct.pack("!Q", 100)),
+    )
+)
+mt, _ = read_frame(ts)
+assert mt == 4, f"final INIT failed mt={mt}"
 ts.sendall(frame(8, tlv(0, struct.pack("!I", 777))))
 mt, _ = read_frame(ts)
 assert mt == 9, f"ECHO failed mt={mt}"

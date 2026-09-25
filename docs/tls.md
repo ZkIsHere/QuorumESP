@@ -103,7 +103,14 @@ Fallback nếu NSS khó: vòng 2a cho server **không yêu cầu** client cert
   3. IDF tắt `MBEDTLS_HAVE_TIME_DATE` (default n) → expiry bị bỏ qua hoàn
      toàn. Đã bật trong `sdkconfig.defaults`; cần SNTP đúng giờ
      (`network/time_sync.c`), sai giờ fail-closed là đúng.
-  4. mbedTLS server authmode default là NONE (chỉ client default REQUIRED).
+   4. mbedTLS server authmode default là NONE (chỉ client default REQUIRED).
+   5. `esp_tls_server_session_delete()` KHÔNG đóng socket (chỉ `conn_delete`
+      mới đóng qua `mbedtls_net_free`) — dù docstring ghi "close ... and
+      free". Mỗi session TLS server rò 1 LWIP socket: pool 10 cạn sau ~9
+      session → `accept errno=23 ENFILE` vĩnh viễn (bắt live 2026-09-25).
+      Fix phía mình: `network_tls_close()` tự `close(fd)` sau delete
+      (xem `firmware/network/tls.c`). Bài học: không tin docstring IDF
+      về ownership, đọc implementation.
 
 ## 9. Không làm ở vòng 2 (đánh số lại từ §6 cũ)
 
