@@ -882,7 +882,16 @@ static void session_task(void *arg) {
     }
     s_nsessions--;
     xSemaphoreGive(s_mux);
-    ESP_LOGI(TAG, "client session end");
+    {
+        /* Event-driven status (no periodic heartbeat by design): sessions
+         * + sockets + heap exactly when a session comes or goes. */
+        int sk;
+        portENTER_CRITICAL(&s_sock_spin);
+        sk = s_nsocks;
+        portEXIT_CRITICAL(&s_sock_spin);
+        ESP_LOGI(TAG, "client session end (sessions=%d socks=%d heap=%u)",
+                 s_nsessions, sk, (unsigned)esp_get_free_heap_size());
+    }
     tp_close(&tp);
     free(rx);
     free(tx);
@@ -924,28 +933,12 @@ static void server_task(void *arg) {
         struct timeval sel_tv = {.tv_sec = 5, .tv_usec = 0};
         int *pfd;
         int cfd;
-        /* Idle heartbeat: sessions + heap every ~60s so a silent stall
-         * (no accepts, no logs) is visible without a serial cable. */
-        static int idle_ticks = 0;
         quorumesp_watchdog_feed();
         FD_ZERO(&rfds);
         FD_SET(lfd, &rfds);
         if (select(lfd + 1, &rfds, NULL, NULL, &sel_tv) <= 0) {
-            if (++idle_ticks >= 12) {
-                int n, sk;
-                idle_ticks = 0;
-                xSemaphoreTake(s_mux, portMAX_DELAY);
-                n = s_nsessions;
-                xSemaphoreGive(s_mux);
-                portENTER_CRITICAL(&s_sock_spin);
-                sk = s_nsocks;
-                portEXIT_CRITICAL(&s_sock_spin);
-                ESP_LOGI(TAG, "status: sessions=%d socks=%d heap=%u", n, sk,
-                         (unsigned)esp_get_free_heap_size());
-            }
-            continue;
+            continue; /* quiet idle: status only prints on events below */
         }
-        idle_ticks = 0;
         cfd = accept(lfd, (struct sockaddr *)&peer, &plen);
         if (cfd < 0) {
             ESP_LOGW(TAG, "accept failed errno=%d heap=%u (pcb/socket exhaustion?)",
@@ -969,7 +962,8 @@ static void server_task(void *arg) {
         {
             esp_ip4_addr_t ip;
             ip.addr = peer.sin_addr.s_addr;
-            ESP_LOGI(TAG, "client " IPSTR, IP2STR(&ip));
+            ESP_LOGI(TAG, "client " IPSTR " (sessions=%d)", IP2STR(&ip),
+                     nrun + 1);
         }
         pfd = (int *)malloc(sizeof(int));
         if (pfd == NULL) {
