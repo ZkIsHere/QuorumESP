@@ -1,6 +1,7 @@
 /* OTA engine. Flow: version check -> download -> verify -> set boot ->
  * reboot -> health confirm (else automatic rollback). See docs/ota.md. */
 #include "ota.h"
+#include "ota_logic.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
 
 static const char *TAG = "OTA";
 
@@ -188,6 +190,38 @@ esp_err_t quorumesp_ota_check_and_update(void) {
         ESP_LOGI(TAG, "already on %s", server_ver);
         return ESP_OK;
     }
+    /* Fail-version memory: don't re-download what already failed us. */
+    {
+        nvs_handle_t h;
+        char tried[64] = {0};
+        size_t n = sizeof(tried);
+        unsigned count = 0;
+        uint32_t c = 0;
+        if (nvs_open("qesp", NVS_READONLY, &h) == ESP_OK) {
+            if (nvs_get_str(h, "otatry", tried, &n) != ESP_OK) {
+                tried[0] = '\0';
+            }
+            nvs_get_u32(h, "otatryn", &c);
+            nvs_close(h);
+            count = (unsigned)c;
+        }
+        if (!ota_should_attempt(tried, count, server_ver)) {
+            ESP_LOGW(TAG, "version %s failed %u times before, skipping "
+                          "(waits for a different version)",
+                     server_ver, count);
+            return ESP_OK;
+        }
+        if (nvs_open("qesp", NVS_READWRITE, &h) == ESP_OK) {
+            if (tried[0] != '\0' && strcmp(tried, server_ver) == 0) {
+                nvs_set_u32(h, "otatryn", c + 1);
+            } else {
+                nvs_set_str(h, "otatry", server_ver);
+                nvs_set_u32(h, "otatryn", 1);
+            }
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
     ESP_LOGW(TAG, "updating %s -> %s", running->version, server_ver);
     if (snprintf(url, sizeof(url), "%s/firmware.bin", base) >= (int)sizeof(url)) {
         return ESP_FAIL;
@@ -219,11 +253,18 @@ esp_err_t quorumesp_ota_check_and_update(void) {
 }
 
 static void confirm_task(void *arg) {
+    nvs_handle_t h;
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(OTA_HEALTHY_MS));
     ESP_LOGI(TAG, "healthy for %ds, confirming image", OTA_HEALTHY_MS / 1000);
     if (esp_ota_mark_app_valid_cancel_rollback() != ESP_OK) {
         ESP_LOGE(TAG, "confirm failed — next reboot may roll back");
+    } else if (nvs_open("qesp", NVS_READWRITE, &h) == ESP_OK) {
+        /* Success clears the fail memory (fresh image, fresh chances). */
+        nvs_erase_key(h, "otatry");
+        nvs_set_u32(h, "otatryn", 0);
+        nvs_commit(h);
+        nvs_close(h);
     }
     vTaskDelete(NULL);
 }

@@ -54,7 +54,7 @@
 |---|---|---|
 | Update tốt | tải → reboot → confirm 60s | live (v0.2.x nhiều vòng) |
 | Image crash trước confirm | rollback về bản cũ ở reboot tới | live (`bad-ota-test` → về bản tốt) |
-| Server serve bản hỏng liên tục | lặp update/crash/rollback (chưa backoff!) | live quan sát; **TODO: retry counter + backoff** |
+| Server serve bản hỏng liên tục | quá 3 lần thì bỏ qua tới khi có version khác (NVS fail-memory) | code + unit test; live-deferred (cần server serve bản hỏng cố ý) |
 | Mất mạng giữa download | giữ image cũ, thử lại reboot sau | code path; live chưa kéo dây mạng giữa chừng (TODO) |
 | USB flash đè ota_0 | mất khả năng rollback (đúng semantics IDF) | live (bài học, đã ghi docs/ota.md) |
 

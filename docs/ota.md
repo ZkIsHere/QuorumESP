@@ -68,7 +68,7 @@ rồi về bản cũ. Ghi kết quả vào đây.
 >   dính vào CMakeCache, build sau vẫn mang nhãn cũ nếu không fullclean).
 > - Version check bằng chuỗi phải chính xác tuyệt đối (kể cả `-dirty`).
 > - Server cứ serve bản hỏng → device update→crash→rollback→update… lặp vô
->   hạn. Production cần đếm số lần fail + backoff (VD: dừng thử N giờ sau 3
+>   hạn. ĐÃ FIX: NVS nhớ version fail + đếm lần thử, quá 3 lần thì bỏ qua tới khi có version khác (ota_should_attempt, unit-test trong firmware/ota/test/). Confirm thành công xóa trí nhớ. Ghi chú cũ: Production cần đếm số lần fail + backoff (VD: dừng thử N giờ sau 3
 >   lần), chưa implement.
 
 ## 4. An toàn
@@ -111,3 +111,11 @@ publish Release gom `firmware.bin` + `version.txt`.
 
 - Device chay release CI 0.2.4, Wi-Fi len bang NVS (build CI khong co creds nao khac) → lready on v0.2.4, mutual TLS + server san sang. Kenh GitHub OTA hoan chinh dau-cuoi.
 - Warning CSP (exceeds max size) vo hai — header do khong can doc.
+
+## 9. Production signing (chua lam)
+
+Hien tai: download HTTPS (verify chain qua cert bundle) + esp_ota image check co ban. Chua co:
+- Ky image (secure boot + CONFIG_SECURE_SIGNED_ON_UPDATE): can quy trinh giu khoa ky offline, provisioning public key vao efuse/partition. Khong co chu ky, ke tan cong chiem duoc update channel co the day image doc hai.
+- Flash encryption: bao ve bert binary + NVS secret khi mat vat ly board.
+- Mutual TLS cho download (server verify device truoc khi cho tai).
+Thu tu khi production-hoa: secure boot -> ky image -> flash encryption -> mutual download.

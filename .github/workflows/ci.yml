@@ -25,4 +25,6 @@ jobs:
         run: |
           make -C firmware/qdevice/test
           make -C firmware/quorum/test
+          make -C firmware/config/test
+          make -C firmware/ota/test
         working-directory: .
