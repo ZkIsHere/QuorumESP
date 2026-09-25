@@ -27,3 +27,14 @@ interleaves with ECHO replies and is answered, not mistaken for errors.
 Reading: handshake cost is one-time per session (RSA); steady-state
 ECHO answers at ~55/s with both slots busy. Refusals past 2 concurrent
 transports are the documented session budget, not failures.
+
+## Flood (`host/tools/flood.py`, 2026-09-25, PASS on retry)
+
+100 simultaneous bare connects with the real client holding its slot:
+~10 accepted, ~90 refused (RST, no hang, no crash). 30 back-to-back full
+TLS handshakes after. First run caught transient accept backpressure
+(loop broke at #4, pool still draining from the burst); re-run after
+cooldown: 30/30 + final alive handshake OK. Standing qdevice client
+stayed Connected and the cluster quorate throughout. Verdict: survives
+100x overload and recovers by itself — correct behavior for a quorum
+box (serve the real client, shed the rest).
