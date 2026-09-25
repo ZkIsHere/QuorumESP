@@ -1,6 +1,7 @@
 # Release: build firmware ON THE SELF-HOSTED runner and publish a GitHub
-# Release carrying firmware.bin + version.txt for on-device OTA.
-#
+# Release carrying firmware.bin + version.txt for the EXTERNAL PC portal
+# (host/portal/ flashes firmware.bin to 0x20000 over USB; there is no
+# on-device auto-updater by design — see docs/ota.md).
 # PREREQUISITE (one-time, manual, on the runner itself — see docs/ota.md):
 # ESP-IDF v6.1 + xtensa toolchain + python env live at ~/esp-idf and
 # ~/esp-tools. CI never downloads toolchains (the runner link stalls on

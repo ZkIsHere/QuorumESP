@@ -1,53 +1,61 @@
 # Web diagnostic UI (AGENTS.md §13)
 
-Read-only diagnostics. Không điều khiển quorum, không đổi config,
-không trigger OTA. Hiển thị sau khi QDevice core đã ổn định.
+Read-only diagnostics on the device. No quorum control, no config edit,
+no firmware update — those live on the EXTERNAL PC portal
+(`host/portal/`), never on-device.
 
-## Bật + auth (dev only, default OFF)
+## Enable + auth (dev only, default OFF)
 
-`QUORUMESP_WEB_ENABLE=n` (default): `web_api_init()` là no-op.
-Production để OFF (giảm attack surface).
+`QUORUMESP_WEB_ENABLE=n` (default): `web_api_init()` is a no-op.
+Production stays OFF (smaller attack surface).
 
-Bật trong menuconfig (`QuorumESP dev`):
+Enable in menuconfig (`QuorumESP → Web UI`):
 
 - `QUORUMESP_WEB_ENABLE=y`
 - `QUORUMESP_WEB_USER` / `QUORUMESP_WEB_PASSWORD` (local sdkconfig,
-  git-ignored — giống cách giữ Wi-Fi secret)
+  git-ignored — same secret handling as Wi-Fi)
 
-Không user/pass → UI từ chối khởi động (`ESP_FAIL`, không có trang mở).
-Mọi handler kiểm tra `Authorization: Basic` (so sánh constant-time);
-thiếu/sai → `401` + `WWW-Authenticate`. POST vốn đã 405 (không handler).
+No user/pass → the UI refuses to start (never an open page).
+Every handler requires HTTP Basic (browser's own login dialog,
+constant-time compare). Missing creds → `401` challenge; wrong creds →
+`401` and counted. Logout is `GET /logout` → `401` (browser re-prompts;
+true logout = close the browser). POST was never implemented → `405`.
 
-## Hiển thị (cố ý tối giản)
+## Rate limit
 
-- Project name + device id, version, uptime (`22s`, `1h 1m 1s`,
-  `2d 3h 4m 5s`, lên tới `y`)
-- Bảng clients đang kết nối (node, algo)
-- Log gần nhất (không chứa secret — project không bao giờ log secret)
+`QUORUMESP_WEB_LOGIN_MAX_FAIL` wrong passwords (default 5) from one IP →
+the IP goes fully silent: connections drop with NO response until
+`QUORUMESP_WEB_LOGIN_BLOCK_S` (default 60s) expires. Unknown peers share
+one fallback bucket so limiting never silently disables itself.
 
-Endpoints (đều GET + auth):
+Proven failure mode (2026-09-25): logging from inside an httpd handler
+overflowed the default 4K worker stack → abort in newlib locks →
+crash-reboot that looked like "silence". Fixed with 8K worker stacks
+(`hcfg.stack_size`). Lesson: keep handler logging minimal.
 
-| Method | Path         | Nội dung                              |
-| ------ | ------------ | ------------------------------------- |
-| GET    | `/`          | Trang HTML: tên/version/uptime/clients/log |
-| GET    | `/api/status`| JSON cùng tập field                   |
-| GET    | `/api/log`   | JSON array 40 dòng log gần nhất       |
+## Display (deliberately minimal, one page)
 
-Snapshot lấy qua `qdevice_status_snapshot()` — copy có khóa, timeout
-200 ms, không bao giờ block đường vote.
+- Project name + device id, version, uptime (`22s` … `2d 3h 4m 5s` … `y`)
+- Connected-client table (node, algo)
+- Recent log (never contains secrets — the project never logs secrets)
+- Debug mode (`QUORUMESP_DEBUG`) adds heap + session count to the stream
 
-## Giới hạn đã biết
+Single interface: `GET /` renders the shell, `GET /events` pushes the
+live values over Server-Sent Events (2s ticks, 60s stream, EventSource
+reconnects). Snapshot via `qdevice_status_snapshot()` (locked copy,
+200 ms timeout — never blocks the vote path).
 
-- Log ring chỉ giữ từ lúc web init (dòng boot trước đó không có).
-- Không auth session/rate-limit, không HTTPS cho UI — chỉ dùng trong
-  mạng lab tin cậy, tắt khi xong việc. (qdevice TLS là kênh riêng,
-  không liên quan.)
-- user/pass nằm plaintext trong sdkconfig/NVS build — chấp nhận được
-  cho dev, production cần provisioning riêng (chưa thiết kế).
+## Known limits
 
-## Live test (board WROOM-32D, đã chạy)
+- Log ring starts at web init (earlier boot lines are not kept).
+- One httpd worker is held up to 60s per open stream; fine for a dev box.
+- No HTTPS/rate-distributed auth for the UI — trusted lab LAN only,
+  turn off when done. (qdevice TLS is a separate channel.)
+- user/pass live plaintext in local sdkconfig — dev-acceptable.
 
-- Không auth → `401` cả 3 endpoint; sai pass → `401`.
-- Đúng auth → `/api/status` JSON gọn (`project/version/uptime/clients`),
-  `/` render bảng node + `<pre>` log khớp session thật.
-- Sau test: flash lại bản default (web OFF), board về steady state.
+## Live test (WROOM-32D)
+
+- No/wrong auth → `401`; 5 wrong → silence (connection drops, no bytes).
+- Correct auth → page renders, SSE ticks update uptime/clients/log.
+- `/logout` → `401` re-prompt.
+- After tests: flashed back to the web-OFF build, board to steady state.

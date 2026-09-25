@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>QuorumESP portal</title></head>
+<body>
+<h1>QuorumESP portal (PC, USB)</h1>
+<p>External updater: no on-device OTA. Pick a board, flash firmware or set Wi-Fi.</p>
+
+<h2>1. Board</h2>
+<p>Port: <select id="port"></select>
+<button onclick="loadPorts()">refresh</button>
+<button onclick="readVer()">read version</button>
+<span id="ver"></span></p>
+
+<h2>2. Flash firmware (.bin to 0x20000)</h2>
+<p>Release: <select id="rel"></select>
+<br>...or local .bin path (this PC): <input id="localbin" size="60"></p>
+<p><button onclick="flash()">flash</button></p>
+
+<h2>3. Provision Wi-Fi (NVS 0x9000)</h2>
+<p>SSID <input id="ssid"> Pass <input id="pass" type="password">
+<button onclick="provision()">provision</button></p>
+
+<h2>Job</h2>
+<pre id="job">idle</pre>
+
+<script>
+async function jget(u){let r=await fetch(u);return r.json();}
+async function jpost(u,b){let r=await fetch(u,{method:'POST',
+  headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json();}
+async function loadPorts(){
+  let d=await jget('/api/ports');
+  let s=document.getElementById('port');s.innerHTML='';
+  (d.ports||[]).forEach(p=>{let o=document.createElement('option');o.text=p;s.add(o);});
+}
+async function loadRel(){
+  let d=await jget('/api/releases');
+  let s=document.getElementById('rel');s.innerHTML='';
+  let rels=(d.releases&&d.releases.error)?[]:(d.releases||[]);
+  rels.forEach(x=>{let o=document.createElement('option');
+    o.text=x.tag;o.value=x.url;s.add(o);});
+  if(!rels.length){let o=document.createElement('option');
+    o.text='(offline — use local .bin)';s.add(o);}
+}
+let timer=null;
+async function poll(jid){
+  clearInterval(timer);
+  timer=setInterval(async()=>{
+    let d=await jget('/api/job/'+jid);
+    document.getElementById('job').textContent=(d.lines||[]).join('\n')+
+      (d.done?('\n-- rc='+d.rc+' --'):'\n-- running --');
+    if(d.done)clearInterval(timer);
+  },1000);
+}
+async function flash(){
+  let port=document.getElementById('port').value;
+  let url=document.getElementById('rel').value||'';
+  let local=document.getElementById('localbin').value||'';
+  let d=await jpost('/api/flash',{port:port,tag:local,url:url.startsWith('http')?url:''});
+  if(d.job)poll(d.job);
+  else document.getElementById('job').textContent='error: '+(d.error||'?');
+}
+async function provision(){
+  let d=await jpost('/api/provision',{port:document.getElementById('port').value,
+    ssid:document.getElementById('ssid').value,password:document.getElementById('pass').value});
+  if(d.job)poll(d.job);
+  else document.getElementById('job').textContent='error: '+(d.error||'?');
+}
+async function readVer(){
+  let port=document.getElementById('port').value;
+  document.getElementById('ver').textContent='reading...';
+  let d=await jget('/api/version?port='+encodeURIComponent(port));
+  document.getElementById('ver').textContent=d.version||'?';
+}
+loadPorts();loadRel();
+</script>
+</body>
+</html>
