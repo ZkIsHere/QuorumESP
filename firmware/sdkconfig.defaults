@@ -44,6 +44,10 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # Watchdog is mandatory for a quorum appliance (AGENTS.md §11).
 CONFIG_ESP_TASK_WDT_EN=y
+# Task watchdog must PANIC (reset), not just warn: a deadlocked quorum
+# appliance must stop, never look alive. Proven live: hung task triggers
+# reset (see docs/failure-matrix.md).
+CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
