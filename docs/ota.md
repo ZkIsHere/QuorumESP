@@ -106,3 +106,8 @@ publish Release gom `firmware.bin` + `version.txt`.
   production can provisioning cert that - chua lam).
 - Test pipeline khong can tag: chay manual `workflow_dispatch` (chi build,
   khong publish).
+
+## 7. Steady state (2026-09-24) — PASS
+
+- Device chay release CI 0.2.4, Wi-Fi len bang NVS (build CI khong co creds nao khac) → lready on v0.2.4, mutual TLS + server san sang. Kenh GitHub OTA hoan chinh dau-cuoi.
+- Warning CSP (exceeds max size) vo hai — header do khong can doc.
