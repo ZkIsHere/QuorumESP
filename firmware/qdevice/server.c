@@ -45,16 +45,26 @@ static const char *TAG = "QDEVICE";
 static const char *PTAG = "PROTOCOL";
 static const char *STAG = "STATE";
 
-/* Session budget (ESP32 classic RAM): 2 concurrent clients x (32K RX + 2K
- * TX + 16K stack + ~35K TLS) ~= 170K of ~230K free heap. Enough for 2-node
- * clusters (the FFSplit target). Bigger clusters need PSRAM hardware.
+/* Session budget (ESP32 classic RAM, measured live 2026-09-25).
+ * Per TLS session steady-state ~= 35-47K (8K stack + ~25K TLS heap +
+ * LWIP); the 4th concurrent TLS handshake needs ~50K free, so the heap
+ * floor (Kconfig, default 40K) refuses instead of crashing. Proven:
+ * 4 concurrent ACTIVE with correct votes (FOUR 4/4); 5th refuses
+ * naturally below the floor, client retries.
  * RX honors the reference 32K minimum a server must accept (qnet-config.h);
  * the real client aborts otherwise (observed: "Server accepts maximum 4096
- * bytes message but this client minimum is 32768 bytes"). */
-#define QESP_MAX_SESSIONS 2
+ * bytes message but this client minimum is 32768 bytes").
+ *
+ * Squeezing (see docs/bench.md): RX/TX are SINGLE shared stash buffers
+ * (all processing is serialized by s_mux), TLS I/O is tuned down via
+ * sdkconfig, and admission is self-assessed (heap floor below) instead of
+ * a hard lock — the ceiling only caps the slot tables. */
 #define QESP_RX_SIZE QESP_INITIAL_MSG_SIZE
 #define QESP_TX_SIZE 2048
-#define QESP_SESSION_STACK 16384
+/* 8K: measured high-water leaves 12K free of 16K (peak incl. RSA
+ * handshake uses ~4K). Keeps 4K margin; the end-of-session log proves
+ * it every run (stack=...). */
+#define QESP_SESSION_STACK 8192
 
 typedef enum { ST_CONNECTED, ST_PREINIT_DONE, ST_ACTIVE, ST_CLOSED } st_t;
 
@@ -104,6 +114,11 @@ static int s_nsessions;
  * later fails ENFILE while this stays low, the leak is outside qdevice. */
 static int s_nsocks;
 static portMUX_TYPE s_sock_spin = portMUX_INITIALIZER_UNLOCKED;
+
+/* Shared message stash (see budget note above): every recv/process/send
+ * runs under s_mux, so one RX + one TX buffer serves all sessions. */
+static uint8_t s_rx[QESP_RX_SIZE];
+static uint8_t s_tx[QESP_TX_SIZE];
 
 static int64_t now_us(void) {
     return esp_timer_get_time();
@@ -744,21 +759,14 @@ static void tp_close(tp_t *tp) {
 static void session_task(void *arg) {
     tp_t tp;
     sess_t s;
-    uint8_t *rx;
-    uint8_t *tx;
-    struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+    /* Idle recv holds s_mux (shared stash): keep turns short so N idle
+     * sessions stall a newcomer by ~N x 250ms, never seconds. DPD (12s)
+     * and 8s heartbeats tolerate this with wide margin. */
+    struct timeval tv = {.tv_sec = 0, .tv_usec = 250000};
     struct timeval snd_tv = {.tv_sec = 5, .tv_usec = 0};
     tp.fd = *(int *)arg;
     tp.tls = NULL;
     free(arg);
-    rx = (uint8_t *)malloc(QESP_RX_SIZE);
-    tx = (uint8_t *)malloc(QESP_TX_SIZE);
-    if (rx == NULL || tx == NULL) {
-        ESP_LOGE(TAG, "session buffers OOM");
-        tp_close(&tp);
-        vTaskDelete(NULL);
-        return;
-    }
     memset(&s, 0, sizeof(s));
     s.st = ST_CONNECTED;
     s.ff_idx = -1;
@@ -774,21 +782,24 @@ static void session_task(void *arg) {
         int r;
         int fr;
         quorumesp_watchdog_feed();
-        fr = recv_frame(&tp, rx, QESP_RX_SIZE, &flen);
+        /* Whole turn under one mux hold (shared stash): every exit path
+         * below must give before break/continue. */
+        xSemaphoreTake(s_mux, portMAX_DELAY);
+        fr = recv_frame(&tp, s_rx, QESP_RX_SIZE, &flen);
         if (fr == -2) {
+            xSemaphoreGive(s_mux);
             break; /* dead transport or broken framing: close now */
         }
         if (fr == -3) {
             /* Oversize for our stash: drain, answer MESSAGE_TOO_LONG,
              * stay connected (fail-closed, bounded RAM). */
             uint32_t drain = (uint32_t)(flen - QESP_MSG_HEADER_LEN);
-            xSemaphoreTake(s_mux, portMAX_DELAY);
             if (drain_frame(&tp, drain) == 0) {
-                size_t tl = err_reply(tx, QESP_TX_SIZE,
+                size_t tl = err_reply(s_tx, QESP_TX_SIZE,
                                       QESP_E_MESSAGE_TOO_LONG,
                                       &(qesp_msg_t){0});
                 if (tl > 0) {
-                    send_all(&tp, tx, tl);
+                    send_all(&tp, s_tx, tl);
                 }
             }
             xSemaphoreGive(s_mux);
@@ -799,15 +810,17 @@ static void session_task(void *arg) {
             if (s.st == ST_ACTIVE && s.hb_ms > 0 &&
                 now_us() - s.last_rx_us > (int64_t)s.hb_ms * 1500) {
                 ESP_LOGW(TAG, "dead peer, closing");
+                xSemaphoreGive(s_mux);
                 break;
             }
             if (s.st == ST_ACTIVE) {
+                xSemaphoreGive(s_mux);
                 continue; /* idle but alive: keep waiting */
             }
+            xSemaphoreGive(s_mux);
             break; /* handshake must be prompt */
         }
-        xSemaphoreTake(s_mux, portMAX_DELAY);
-        r = on_frame(&s, rx, flen, QESP_RX_SIZE, tx, QESP_TX_SIZE, &txlen);
+        r = on_frame(&s, s_rx, flen, QESP_RX_SIZE, s_tx, QESP_TX_SIZE, &txlen);
         if (r == UPGRADE_REQ) {
             /* require flag from Kconfig; cluster CN for the 2b check.
              * The handshake blocks on the network: NEVER hold s_mux
@@ -840,7 +853,7 @@ static void session_task(void *arg) {
             xSemaphoreGive(s_mux);
             break;
         }
-        if (r == 0 && txlen > 0 && send_all(&tp, tx, txlen) != 0) {
+        if (r == 0 && txlen > 0 && send_all(&tp, s_tx, txlen) != 0) {
             xSemaphoreGive(s_mux);
             break;
         }
@@ -855,11 +868,11 @@ static void session_task(void *arg) {
         s_tp[s.ff_idx].tls = NULL;
         s_lms_last[s.ff_idx] = QESP_LMS_NEW;
         if (s_algo == QESP_ALGO_FFSPLIT) {
-            recompute(tx, QESP_TX_SIZE);
+            recompute(s_tx, QESP_TX_SIZE);
         } else if (s_algo == QESP_ALGO_LMS) {
             /* Reference runs no recompute here; refresh waiters instead
              * (timer-equivalent, see lms_refresh_others). */
-            lms_refresh_others(-1, tx, QESP_TX_SIZE);
+            lms_refresh_others(-1, s_tx, QESP_TX_SIZE);
         }
         s.ff_idx = -1;
         /* Last client left: drop cluster state like the reference frees
@@ -882,19 +895,20 @@ static void session_task(void *arg) {
     }
     s_nsessions--;
     xSemaphoreGive(s_mux);
+    tp_close(&tp);
     {
         /* Event-driven status (no periodic heartbeat by design): sessions
-         * + sockets + heap exactly when a session comes or goes. */
+         * + sockets + heap + task stack watermark exactly when a session
+         * comes or goes. Read AFTER tp_close so socks is exact. */
         int sk;
+        unsigned hwm;
         portENTER_CRITICAL(&s_sock_spin);
         sk = s_nsocks;
         portEXIT_CRITICAL(&s_sock_spin);
-        ESP_LOGI(TAG, "client session end (sessions=%d socks=%d heap=%u)",
-                 s_nsessions, sk, (unsigned)esp_get_free_heap_size());
+        hwm = (unsigned)uxTaskGetStackHighWaterMark(NULL);
+        ESP_LOGI(TAG, "client session end (sessions=%d socks=%d heap=%u stack=%u)",
+                 s_nsessions, sk, (unsigned)esp_get_free_heap_size(), hwm);
     }
-    tp_close(&tp);
-    free(rx);
-    free(tx);
     quorumesp_watchdog_remove_current();
     vTaskDelete(NULL);
 }
@@ -947,23 +961,40 @@ static void server_task(void *arg) {
         }
         tune_servant_socket(cfd);
         sock_opened();
-        xSemaphoreTake(s_mux, portMAX_DELAY);
-        nrun = s_nsessions;
-        if (nrun < QESP_MAX_SESSIONS) {
-            s_nsessions++;
-        }
-        xSemaphoreGive(s_mux);
-        if (nrun >= QESP_MAX_SESSIONS) {
-            ESP_LOGW(TAG, "session table full (%d), refusing client", nrun);
-            close(cfd);
-            sock_closed();
-            continue;
+        {
+            /* Self-assessed admission (no hard lock): admit only under the
+             * slot ceiling AND above the heap floor. Either refusal is
+             * fail-closed and logged distinctly; the client retries. The
+             * heap read races concurrent tasks by design — worst case a
+             * later malloc fails, and every one of those paths already
+             * fails closed with a clear log. */
+            uint32_t heap = esp_get_free_heap_size();
+            int admit = 0;
+            xSemaphoreTake(s_mux, portMAX_DELAY);
+            nrun = s_nsessions;
+            if (nrun < CONFIG_QUORUMESP_MAX_SESSIONS &&
+                heap > CONFIG_QUORUMESP_MIN_HEAP_ACCEPT) {
+                s_nsessions++;
+                admit = 1;
+            }
+            xSemaphoreGive(s_mux);
+            if (!admit) {
+                if (nrun >= CONFIG_QUORUMESP_MAX_SESSIONS) {
+                    ESP_LOGW(TAG, "session table full (%d), refusing client",
+                             nrun);
+                } else {
+                    ESP_LOGW(TAG, "low heap (%u), refusing client", (unsigned)heap);
+                }
+                close(cfd);
+                sock_closed();
+                continue;
+            }
         }
         {
             esp_ip4_addr_t ip;
             ip.addr = peer.sin_addr.s_addr;
-            ESP_LOGI(TAG, "client " IPSTR " (sessions=%d)", IP2STR(&ip),
-                     nrun + 1);
+            ESP_LOGI(TAG, "client " IPSTR " (sessions=%d heap=%u)", IP2STR(&ip),
+                     nrun + 1, (unsigned)esp_get_free_heap_size());
         }
         pfd = (int *)malloc(sizeof(int));
         if (pfd == NULL) {

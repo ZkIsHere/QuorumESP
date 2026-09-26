@@ -20,6 +20,15 @@ menu "QuorumESP"
             int "qnetd-side TCP listen port"
             default 5403
 
+        config QUORUMESP_MAX_SESSIONS
+            int "Absolute ceiling for concurrent sessions (runtime heap gate decides)"
+            range 1 8
+            default 5
+
+        config QUORUMESP_MIN_HEAP_ACCEPT
+            int "Free-heap floor (bytes) to admit a new session; below = refuse"
+            default 40960
+
     endmenu
 
     menu "TLS certificates"

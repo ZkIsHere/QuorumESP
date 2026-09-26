@@ -15,7 +15,8 @@
 | Oversize frame (>32K) | drain + `MESSAGE_TOO_LONG`, giữ kết nối | code + drain path; live 8K garbage → `ERROR_DECODING_MSG` + alive (oversize-probe) |
 | Malformed TLV/header | reject + error reply, giữ kết nối; framing sai thì drop | host tests + live (`framing reject`, `decode failed`) |
 | Cluster name lạ giữa chừng | đóng kết nối (single-cluster scope) | live (probe cluster `ab` bị refuse đúng) |
-| Reconnect storm | mỗi session độc lập, table tối đa 2 (+8 vote slots), đầy thì refuse log rõ | **live 2026-09-25**: `storm.py` 50 handshake TLS liên tiếp + burst 20 concurrent + INIT/ECHO cuối → `STORM: PASS`, 0 lỗi (qdevice tắt trước để khỏi tranh slot) |
+| Reconnect storm | session độc lập, refuse sạch khi hết slot, đầy thì refuse log rõ | **live 2026-09-25**: `storm.py` 50 handshake TLS liên tiếp + burst 20 concurrent + INIT/ECHO cuối → `STORM: PASS`, 0 lỗi (qdevice tắt trước để khỏi tranh slot). Budget hiện tại: ceiling 5 + heap floor (xem hàng dưới), chứng minh 4 ACTIVE (`four.py`) |
+| Hết slot / hết heap | refuse sạch + log rõ (`table full` / `low heap (N)`), client retry | **live 2026-09-25**: session thứ 5 refuse ở heap ~20-30K; handshake TLS thứ 4 concurrent OOM dưới ~60K (fail-closed, các session kia bình thường). Không crash, không ENFILE, tự hồi |
 
 ## 2. TLS / auth
 

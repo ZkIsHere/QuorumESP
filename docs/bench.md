@@ -28,6 +28,27 @@ Reading: handshake cost is one-time per session (RSA); steady-state
 ECHO answers at ~55/s with both slots busy. Refusals past 2 concurrent
 transports are the documented session budget, not failures.
 
+## 4 sessions (classic ESP32 squeezed, 2026-09-25)
+
+Per-session steady cost measured from heap logs: **~40-47K**
+(148K → 113K → 78K → 49K across 4 admissions). Squeezing applied:
+shared RX/TX stash (one 32K+2K for all sessions, serialized by mutex),
+TLS I/O 8K/4K, task stack 16K→8K (watermark proves ~4K use, ~3.9K margin),
+socket pool 10→16. Admission is self-assessed: ceiling 5 + heap floor
+40K (basis: 4th handshake succeeded from 49.2K; below floor = clean
+refuse, client retries). 5th concurrent refuses naturally (~20-30K).
+
+- `four.py`: **4/4 ACTIVE simultaneously**, ECHO flowing on all.
+- bench concurrency: k=1,2,3 full; k=4 mostly 3+1 (10s tool timeout,
+  not server refusal — `four.py` with 30s proves 4/4).
+- ECHO single-session rate unchanged (56.5/s) — shared mutex costs
+  nothing when uncontended; loaded 2-session latency ~375ms (250ms
+  recv turns), fine for 8s heartbeats.
+- 4th concurrent TLS handshake OOMs below ~60K free (fail-closed,
+  others unaffected) — this is what the floor guards.
+- Stack 8K safe: watermark 3856-3868 free at session end (peak incl.
+  RSA handshake ≤ ~4.3K).
+
 ## Flood (`host/tools/flood.py`, 2026-09-25, PASS on retry)
 
 100 simultaneous bare connects with the real client holding its slot:

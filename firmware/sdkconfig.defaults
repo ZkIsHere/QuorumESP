@@ -9,16 +9,6 @@ CONFIG_IDF_TARGET="esp32"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
-# OTA manual redirect following reads the Location *response* header.
-CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS=y
-# GitHub sends ~20 headers; the signed Location alone is ~1K.
-CONFIG_ESP_HTTP_CLIENT_MAX_SAVED_RESPONSE_HEADERS=32
-CONFIG_ESP_HTTP_CLIENT_MAX_RESPONSE_HEADER_SIZE=1024
-
-# DEV ONLY: allow plain-HTTP OTA (LAN test server). Production must use
-# HTTPS with cert_pem (see docs/ota.md §4). Without this, esp_https_ota
-# refuses configs without server verification (fail-closed default).
-CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
 # App rollback: a new image must confirm health or the bootloader
 # reverts to the previous one (AGENTS.md §12).
@@ -51,3 +41,9 @@ CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+
+# 4-session budget (measured in docs/bench.md): socket pool headroom +
+# smaller TLS I/O buffers (handshake flights are ~2-4K; app records ≤2K).
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096

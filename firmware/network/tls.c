@@ -350,8 +350,12 @@ fail_free:
 
 /* Exact read with an overall deadline so a silent peer surfaces as a
  * timeout (-1) instead of blocking forever, and a dead one as -2.
- * WANT_READ from SO_RCVTIMEO expiry counts toward the deadline. */
-#define TLS_IO_DEADLINE_MS 6000
+ * WANT_READ from SO_RCVTIMEO expiry counts toward the deadline.
+ * 1s (not more): session turns hold the shared stash mutex, so one idle
+ * peer must never stall the others for long (see server.c budget note).
+ * Kept at 500ms: LAN delivery is instant; slow senders just retry next
+ * turn (ACTIVE sessions) or fail prompt handshakes (pre-INIT). */
+#define TLS_IO_DEADLINE_MS 500
 
 static int raw_read_n(mbedtls_ssl_context *ssl, uint8_t *buf, size_t len) {
     size_t got = 0;
