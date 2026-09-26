@@ -27,6 +27,8 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKI_DIR = os.path.join(os.path.dirname(HERE), "pki")
 IDF_PATH = os.environ.get("IDF_PATH", "")
+NVS_ADDR, NVS_SIZE = 0x9000, 0x6000
+APP_ADDR = 0x20000
 JOBS = {}
 JOB_SEQ = [0]
 JOBS_LOCK = threading.Lock()
@@ -152,6 +154,62 @@ def download(url, dst):
             f.write(chunk)
 
 
+def gen_nvs_bin(mapping, dst):
+    """Write an NVS partition image from {key: (type, value)} via IDF tool."""
+    gen = os.path.join(IDF_PATH, "components", "nvs_flash",
+                       "nvs_partition_generator", "nvs_partition_gen.py")
+    if not os.path.isfile(gen):
+        raise FileNotFoundError("IDF_PATH not set (need nvs_partition_gen.py)")
+    tmp = tempfile.mkdtemp(prefix="qesp-portal-")
+    csv = os.path.join(tmp, "cfg.csv")
+    with open(csv, "w", encoding="ascii", errors="replace", newline="") as f:
+        f.write("key,type,encoding,value\nqesp,namespace,,\n")
+        for k, (t, v) in mapping.items():
+            f.write(f"{k},data,{t},{v}\n")
+    subprocess.run([sys.executable, gen, "generate", csv, dst,
+                    hex(NVS_SIZE)], check=True, capture_output=True,
+                   text=True, timeout=60)
+
+
+# qesp key table (CSV *encoding* names + firmware defaults).
+QESP_TYPES = {"ver": ("u32", 1), "host": ("string", "quorumesp"),
+              "wssid": ("string", ""), "wpass": ("string", ""),
+              "netmode": ("u8", 0), "devid": ("string", ""),
+              "logl": ("u8", 3), "qdport": ("u16", 5403)}
+
+
+def read_nvs(port):
+    """read_flash the NVS partition and parse the qesp namespace."""
+    sys.path.insert(0, HERE)
+    from nvs import parse_partition
+    tmp = tempfile.mkdtemp(prefix="qesp-portal-")
+    dst = os.path.join(tmp, "nvs.bin")
+    subprocess.run([sys.executable, "-m", "esptool", "--chip", "esp32",
+                    "-p", port, "read_flash", hex(NVS_ADDR),
+                    hex(NVS_SIZE), dst], check=True, capture_output=True,
+                   text=True, timeout=120)
+    with open(dst, "rb") as f:
+        data = f.read()
+    try:
+        os.remove(dst)
+    except OSError:
+        pass
+    return parse_partition(data).get("qesp", {})
+
+
+def board_info(port):
+    """chip/mac via esptool chip_id."""
+    p = subprocess.run(
+        [sys.executable, "-m", "esptool", "--chip", "esp32", "-p", port,
+         "chip_id"], capture_output=True, text=True, timeout=60)
+    out = p.stdout + p.stderr
+    chip = re.search(r"Chip (?:is|type):\s+([^\r\n(]+)", out)
+    mac = re.search(r"MAC:\s+([0-9a-fA-F:]+)", out)
+    return {"chip": chip.group(1).strip() if chip else "?",
+            "mac": mac.group(1) if mac else "?",
+            "ok": p.returncode == 0}
+
+
 def read_version(port, baud=115200, seconds=12):
     """Reset the board by opening serial, catch 'App version:' from boot."""
     try:
@@ -218,6 +276,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             port = (q.get("port") or [""])[0]
             self.send_json({"version": read_version(port)})
+        elif path.startswith("/api/board"):
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            port = (q.get("port") or [""])[0]
+            try:
+                info = board_info(port)
+            except Exception as e:  # noqa: BLE001 - surfaced to UI
+                self.send_json({"error": str(e)}, 400)
+                return
+            self.send_json(info)
+        elif path.startswith("/api/config"):
+            # Live config read (prefill the edit form; nothing is changed).
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            port = (q.get("port") or [""])[0]
+            try:
+                cur = read_nvs(port)
+            except Exception as e:  # noqa: BLE001 - surfaced to UI
+                self.send_json({"error": str(e)}, 400)
+                return
+            self.send_json({"config": cur})
+        elif path.startswith("/api/dl"):
+            # Proxy a release firmware.bin (dodges browser CORS on the
+            # redirect chain; used by the WebSerial flash section).
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            url = (q.get("url") or [""])[0]
+            if not url.startswith("https://github.com/ZkIsHere/QuorumESP/"):
+                self.send_error(403)
+                return
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "QuorumESP-portal"})
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    body = r.read(4 * 1024 * 1024 + 1)
+            except Exception:  # noqa: BLE001 - surfaced to UI
+                self.send_error(502)
+                return
+            if len(body) > 4 * 1024 * 1024:
+                self.send_error(413)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif path.startswith("/pki/"):
             # Download minted CLIENT certs only. CA key / serials: never.
             name = path.rsplit("/", 1)[-1]
@@ -285,40 +386,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             self.send_json({"crt": "/pki/" + crt, "key": "/pki/" + key})
         elif path == "/api/provision":
+            # Config edit with preservation: read the live NVS first, merge
+            # the user's fields over it, regenerate the FULL image. Keys the
+            # user didn't touch (devid, log level, ports...) survive byte-
+            # identical. Refuses if the live read fails (never blind-write).
             body = self.read_json() or {}
-            port, ssid, password = (body.get("port") or "", body.get("ssid") or "",
-                                    body.get("password") or "")
-            if not port or not ssid:
-                self.send_json({"error": "port + ssid required"}, 400)
+            port = body.get("port") or ""
+            if not port:
+                self.send_json({"error": "port required"}, 400)
                 return
-            if len(ssid) > 32 or len(password) > 64:
-                self.send_json({"error": "ssid<=32, password<=64"}, 400)
+            try:
+                cur = read_nvs(port)
+            except Exception as e:  # noqa: BLE001 - surfaced to UI
+                self.send_json({"error": f"read live NVS first: {e}"}, 400)
                 return
-            gen = os.path.join(IDF_PATH, "components", "nvs_flash",
-                               "nvs_partition_generator", "nvs_partition_gen.py")
-            if not os.path.isfile(gen):
-                self.send_json({"error": "IDF_PATH not set (need nvs_partition_gen.py)"},
+            if "ver" not in cur:
+                self.send_json({"error": "no qesp config on device"}, 400)
+                return
+            merged = {}
+            for k, (t, dflt) in QESP_TYPES.items():
+                v = body.get(k, None)
+                if v is None or (isinstance(v, str) and v == ""):
+                    v = cur.get(k, dflt)
+                merged[k] = (t, v)
+            ssid, password = merged["wssid"][1], merged["wpass"][1]
+            if not (1 <= len(ssid) <= 32) or not (0 <= len(password) <= 64):
+                self.send_json({"error": "ssid 1..32, password 0..64"}, 400)
+                return
+            try:
+                qd = int(merged["qdport"][1])
+                lg = int(merged["logl"][1])
+                nm = int(merged["netmode"][1])
+            except (ValueError, TypeError):
+                self.send_json({"error": "qdport/logl/netmode must be numbers"},
                                400)
                 return
+            if qd == 0 or not (0 <= lg <= 5) or nm not in (0, 1):
+                self.send_json({"error": "qdport nonzero, logl 0..5, netmode 0/1"},
+                               400)
+                return
+            merged["qdport"] = ("u16", qd)
+            merged["logl"] = ("u8", lg)
+            merged["netmode"] = ("u8", nm)
+            merged["ver"] = ("u32", 1)
             tmp = tempfile.mkdtemp(prefix="qesp-portal-")
-            csv = os.path.join(tmp, "wifi.csv")
-            out = os.path.join(tmp, "nvs-wifi.bin")
-            with open(csv, "w", encoding="ascii",
-                      errors="replace", newline="") as f:
-                f.write("key,type,encoding,value\nqesp,namespace,,\n"
-                        f"wssid,data,string,{ssid}\n"
-                        f"wpass,data,string,{password}\n")
+            out = os.path.join(tmp, "nvs.bin")
             try:
-                subprocess.run([sys.executable, gen, "generate", csv, out,
-                                "0x6000"], check=True, capture_output=True,
-                               text=True, timeout=60)
+                gen_nvs_bin(merged, out)
             except Exception as e:  # noqa: BLE001 - surfaced to UI
                 self.send_json({"error": f"nvs generate: {e}"}, 400)
                 return
+            before = {k: cur.get(k) for k in QESP_TYPES}
             jid = run_job(f"provision {port}", [sys.executable, "-m", "esptool",
                                                  "--chip", "esp32", "-p", port,
-                                                 "write_flash", "0x9000", out])
-            self.send_json({"job": jid})
+                                                 "write_flash",
+                                                 hex(NVS_ADDR), out])
+            self.send_json({"job": jid, "kept": before})
         else:
             self.send_error(404)
 
