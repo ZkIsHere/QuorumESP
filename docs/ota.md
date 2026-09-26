@@ -2,13 +2,13 @@
 
 There is NO on-device updater. No auto-check, no download, no version
 memory in firmware (removed; see git history for the old GitHub
-auto-update design and its live tests). Updates are performed by the
-EXTERNAL PC portal (`host/portal/`) over USB serial:
+auto-update design and its live tests). Updates are performed externally
+over USB serial — via `idf.py flash`, or the static portal
+(`host/portal-static/`, WebSerial in the browser):
 
-- pick the board (serial port)
-- pick firmware (GitHub release asset or local `.bin`)
-- flash app image to `0x20000` via esptool
-- provision Wi-Fi (SSID/pass → NVS at `0x9000`)
+- pick the board
+- pick firmware (GitHub release asset)
+- flash app image to `0x20000` (NVS/config never touched)
 - read back the running version from the boot log
 
 ## Why external

@@ -74,7 +74,7 @@ in `docs/interop.md` + `docs/failure-matrix.md`.
 ## Updates
 
 No on-device updater. Flash via USB (`idf.py flash`) or the external PC
-portal (`host/portal/` — release `firmware.bin` to `0x20000`). See
+portal (`host/portal-static/` — release `firmware.bin` to `0x20000`). See
 `docs/ota.md`.
 
 ## CI

@@ -39,9 +39,9 @@ firmware/            ESP-IDF project (C)
   ├── quorum/        FFSplit + LMS decision cores
   ├── network/       Wi-Fi dev transport, TLS (menuconfig certs), SNTP
   ├── ...            config (NVS), watchdog, web (read-only UI)
-host/                Node harness + Python probes + PC/USB portal
-  portal/           local portal (USB flash, config, cert minting)
+host/                Node harness + Python probes + static web portal
   portal-static/    Cloudflare Pages portal (WebSerial, no server)
+  pki/              local CA + mint-client.sh (client certs, dev only)
 ```
 
 ## Quickstart (developers)
@@ -59,7 +59,7 @@ host/                Node harness + Python probes + PC/USB portal
 Pushing a `v*` tag builds firmware in CI (self-hosted runner, cached IDF)
 and publishes a GitHub Release with `firmware.bin` + `version.txt`. There
 is NO on-device auto-updater by design — flash via USB (`idf.py flash`)
-or the portals (`host/portal/`, `host/portal-static/`). Details:
+or the static portal (`host/portal-static/`). Details:
 `docs/ota.md`.
 
 ## Hardware (current)

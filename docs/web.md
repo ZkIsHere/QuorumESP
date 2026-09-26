@@ -1,8 +1,8 @@
 # Web diagnostic UI (AGENTS.md §13)
 
 Read-only diagnostics on the device. No quorum control, no config edit,
-no firmware update — those live on the EXTERNAL PC portal
-(`host/portal/`), never on-device.
+no firmware update — those live on the static portal
+(`host/portal-static/`), never on-device.
 
 ## Enable + auth (dev only, default OFF)
 

@@ -3,8 +3,8 @@
 #   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release"
 # so local menuconfig/sdkconfig setups are untouched.
 #
-# Artifacts (firmware.bin + version.txt) are consumed by the EXTERNAL PC
-# portal (host/portal/) over USB — there is no on-device auto-updater
+# Artifacts (firmware.bin + version.txt) are consumed by the static portal
+# (host/portal-static/) over USB — there is no on-device auto-updater
 # (see docs/ota.md).
 
 # Server-auth TLS only if certs embedded (CI embeds none),

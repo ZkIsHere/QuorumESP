@@ -54,11 +54,10 @@ xương máu: từng flash cert cũ vì cache không nhận file đổi).
 
 Thiếu cả hai → TLS unavailable, server plaintext-only (fail-closed).
 
-**Client cert từng node** (mutual mode cần): portal ngoài
-(`host/portal/` → Mint client cert, CN = tên cluster) ký bằng CA local
-(`host/pki/ca.key`, git-ignored, KHÔNG BAO GIỜ qua HTTP). Hoặc script
-`host/pki/mint-client.sh <CN>` + enroll NSS tay. CA key cũ mất nên
-2026-09-25 đã renew toàn bộ PKI dev (hạn 90 ngày).
+**Client cert từng node** (mutual mode cần): script
+`host/pki/mint-client.sh <CN>` (CN = tên cluster) ký bằng CA local
+(`host/pki/ca.key`, git-ignored, KHÔNG BAO GIỜ qua HTTP), rồi enroll NSS
+tay. CA key cũ mất nên 2026-09-25 đã renew toàn bộ PKI dev (hạn 90 ngày).
 
 ## 4. Enroll client cho qdevice WSL (NSS DB, theo flow reference)
 

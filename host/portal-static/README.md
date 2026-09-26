@@ -35,9 +35,8 @@ python -m http.server 8000 --directory host/portal-static
 
 An earlier revision had a byte-exact JS NVS reader/generator for
 in-browser config editing (proven `cmp`-clean vs the IDF generator).
-Removed with the config UI (git history keeps it); the local portal
-(`host/portal/`) still does config via Python. If on-device config
-editing ever returns, port from history, don't reinvent.
+Removed with the config UI (git history keeps it). Config provisioning
+lives in `docs/provisioning.md` (NVS partition via esptool) instead.
 
 ## Honest limits
 
@@ -45,9 +44,6 @@ editing ever returns, port from history, don't reinvent.
   for the esptool-js CDN. OS USB-serial driver still required (usually
   automatic) — "no install" means no Python/esptool, not no driver.
 - Browser flashing is **not yet exercised against real hardware here**
-  (needs a hand on USB + browser); backend USB flow is proven via the
-  local portal instead. Report issues.
-- Client-cert minting stays on the local portal (`host/portal/`):
-  signing needs the CA private key, which must never leave your PC.
-- NVS addresses (`0x9000`/`0x6000`) mirror `firmware/partitions.csv`;
-  update both if the layout ever changes.
+  (needs a hand on USB + browser). Report issues.
+- Client-cert minting is `host/pki/mint-client.sh` on your own PC:
+  signing needs the CA private key, which must never leave it.
