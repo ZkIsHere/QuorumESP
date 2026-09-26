@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QuorumESP portal (static)</title></head>
+<body>
+<h1>QuorumESP portal — static, no server</h1>
+<p>Runs fully in your browser (Chrome/Edge + USB cable). No Python, no
+install. Your OS still needs its USB-serial driver (usually automatic).
+Client-cert minting stays on the <a href="https://github.com/ZkIsHere/QuorumESP/tree/main/host/portal">local portal</a>.</p>
+
+<h2>1. Board</h2>
+<p><button id="bPort">pick port</button>
+<button id="bInfo" disabled>board info</button>
+<button id="bVer" disabled>read version</button></p>
+<p id="board">no board</p>
+
+<h2>2. Flash firmware (app to 0x20000 — NVS/config never touched)</h2>
+<p>Release: <select id="rel"><option value="">(loading...)</option></select>
+<button id="bRel">refresh</button><br>
+...or local .bin: <input type="file" id="locbin" accept=".bin"></p>
+<p><button id="bFlash" disabled>flash</button></p>
+
+<h2>3. Config (read first, merge, never blind-write)</h2>
+<p><button id="bCfg" disabled>read live config</button></p>
+<p>SSID <input id="f_ssid" size="34"> Pass <input id="f_pass" type="password" size="34"></p>
+<p>Hostname <input id="f_host" size="20"> QDevice port <input id="f_qdport" size="6">
+Log <input id="f_logl" size="3"> Netmode <input id="f_net" size="3"> (0 DHCP/1 static)</p>
+<p><button id="bSave" disabled>save (merge + press EN on board)</button>
+<span id="cfgmsg"></span></p>
+
+<h2>Log</h2>
+<pre id="log">idle. Pick a port to begin.</pre>
+
+<script src="https://unpkg.com/esptool-js/bundle.js"></script>
+<script src="./nvs.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
