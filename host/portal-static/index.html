@@ -1,39 +1,115 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QuorumESP portal (static)</title></head>
+<title>QuorumESP portal</title>
+<style>
+  :root{
+    --bg:#0f1419; --card:#1a222c; --line:#2a3542; --txt:#dbe4ee;
+    --dim:#8fa0b3; --acc:#4da3ff; --ok:#3fd68c; --warn:#ffb224; --err:#ff6b6b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);font:15px/1.55 system-ui,sans-serif;
+    margin:0;padding:24px 16px 64px}
+  .wrap{max-width:860px;margin:0 auto}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+  .dot{width:12px;height:12px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  h1{font-size:22px;margin:0}
+  .sub{color:var(--dim);font-size:13px;margin:2px 0 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;margin:14px 0}
+  .card h2{font-size:15px;margin:0 0 12px;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--dim)}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+  label{color:var(--dim);font-size:13px;min-width:88px}
+  input,select{background:#0d1319;color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;font-size:14px;max-width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--acc)}
+  button{background:var(--acc);color:#06121f;border:0;border-radius:8px;
+    padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.4;cursor:default}
+  button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+  #board{font-family:var(--mono);font-size:13px;color:var(--ok)}
+  #cfgmsg{font-size:13px;color:var(--warn)}
+  #log{background:#0a0e12;border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;
+    min-height:120px;max-height:380px;overflow:auto}
+  .note{font-size:13px;color:var(--dim)}
+  a{color:var(--acc)}
+  footer{color:var(--dim);font-size:12.5px;margin-top:24px}
+</style>
+</head>
 <body>
-<h1>QuorumESP portal — static, no server</h1>
-<p>Runs fully in your browser (Chrome/Edge + USB cable). No Python, no
-install. Your OS still needs its USB-serial driver (usually automatic).
-Client-cert minting stays on the <a href="https://github.com/ZkIsHere/QuorumESP/tree/main/host/portal">local portal</a>.</p>
+<div class="wrap">
+  <header>
+    <span class="dot" id="dot"></span>
+    <div>
+      <h1>QuorumESP portal</h1>
+      <p class="sub">Static · no server · board updates over USB — NVS/config never touched by flashing</p>
+    </div>
+  </header>
 
-<h2>1. Board</h2>
-<p><button id="bPort">pick port</button>
-<button id="bInfo" disabled>board info</button>
-<button id="bVer" disabled>read version</button></p>
-<p id="board">no board</p>
+  <div class="card">
+    <h2>1 · Board</h2>
+    <div class="row">
+      <button id="bPort">Pick port</button>
+      <button id="bInfo" class="ghost" disabled>Board info</button>
+      <button id="bVer" class="ghost" disabled>Read version</button>
+    </div>
+    <p id="board">no board connected</p>
+    <p class="note">Chrome/Edge + USB cable. Minting client certs stays on the
+      <a href="https://github.com/ZkIsHere/QuorumESP/tree/main/host/portal">local portal</a>
+      (CA key must never leave your PC).</p>
+  </div>
 
-<h2>2. Flash firmware (app to 0x20000 — NVS/config never touched)</h2>
-<p>Release: <select id="rel"><option value="">(loading...)</option></select>
-<button id="bRel">refresh</button><br>
-...or local .bin: <input type="file" id="locbin" accept=".bin"></p>
-<p><button id="bFlash" disabled>flash</button></p>
+  <div class="card">
+    <h2>2 · Flash firmware <span class="note">— app to 0x20000</span></h2>
+    <div class="row">
+      <label for="rel">Release</label>
+      <select id="rel"><option value="">(loading...)</option></select>
+      <button id="bRel" class="ghost">Refresh</button>
+    </div>
+    <div class="row">
+      <label for="locbin">Local .bin</label>
+      <input type="file" id="locbin" accept=".bin">
+      <button id="bFlash" disabled>Flash</button>
+    </div>
+  </div>
 
-<h2>3. Config (read first, merge, never blind-write)</h2>
-<p><button id="bCfg" disabled>read live config</button></p>
-<p>SSID <input id="f_ssid" size="34"> Pass <input id="f_pass" type="password" size="34"></p>
-<p>Hostname <input id="f_host" size="20"> QDevice port <input id="f_qdport" size="6">
-Log <input id="f_logl" size="3"> Netmode <input id="f_net" size="3"> (0 DHCP/1 static)</p>
-<p><button id="bSave" disabled>save (merge + press EN on board)</button>
-<span id="cfgmsg"></span></p>
+  <div class="card">
+    <h2>3 · Config <span class="note">— read first, merge, never blind-write</span></h2>
+    <div class="row"><button id="bCfg" disabled>Read live config</button><span id="cfgmsg"></span></div>
+    <div class="row"><label for="f_ssid">SSID</label><input id="f_ssid" size="34">
+      <label for="f_pass">Pass</label><input id="f_pass" type="password" size="34"></div>
+    <div class="row"><label for="f_host">Hostname</label><input id="f_host" size="20">
+      <label for="f_qdport">QDevice port</label><input id="f_qdport" size="6"></div>
+    <div class="row"><label for="f_logl">Log level</label><input id="f_logl" size="3">
+      <label for="f_net">Netmode</label><input id="f_net" size="3" placeholder="0 DHCP / 1 static"></div>
+    <div class="row"><button id="bSave" disabled>Save (merge + press EN)</button></div>
+  </div>
 
-<h2>Log</h2>
-<pre id="log">idle. Pick a port to begin.</pre>
+  <div class="card">
+    <h2>Status</h2>
+    <p id="ver" class="note">—</p>
+    <pre id="log">Idle. Pick a port to begin.</pre>
+  </div>
+
+  <footer>QuorumESP experimental tooling — diagnostics only, never quorum control.</footer>
+</div>
 
 <script src="https://unpkg.com/esptool-js/bundle.js"></script>
 <script src="./nvs.js"></script>
 <script src="./app.js"></script>
+<script>
+  // Green dot once a board answers.
+  const _dot = document.getElementById('dot');
+  setInterval(() => {
+    const t = document.getElementById('board').textContent || '';
+    _dot.className = 'dot' + ((/ESP32|version|qesp/i.test(t)) ? ' on' : '');
+  }, 1500);
+</script>
 </body>
 </html>
