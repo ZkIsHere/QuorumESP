@@ -94,3 +94,8 @@ firmware/ota-test/
 host/pki/*
 # ...except the minting script itself (no secrets in it).
 !host/pki/mint-client.sh
+# Node / wrangler local runs (portal-static dev). Never commit.
+node_modules/
+.wrangler/
+package.json
+package-lock.json

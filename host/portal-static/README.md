@@ -2,39 +2,42 @@
 
 External management web with **no server**: static files on Cloudflare
 Pages + one tiny Worker + browser WebSerial. For other people's boards:
-pick ESP32, pick firmware, edit config, flash — no Python install.
+pick a board card, see firmware version, flash a release.
 
 ```sh
 # Deploy (Cloudflare Pages, static dir + one Function):
 npx wrangler pages deploy host/portal-static --project-name quorumes-portal
-# Local preview of the static part (no WebSerial headless — UI only):
-npx wrangler pages dev host/portal-static
+# Local preview:
+python -m http.server 8000 --directory host/portal-static
+# then open http://localhost:8000 in Chrome/Edge
 ```
+
+## UI (deliberately minimal)
+
+- Top: project name + firmware version of the connected board.
+- Board grid: static 2D art + model per supported board (`boards.js`
+  catalog — add future hardware there). Click = WebSerial connect.
+- Release select + Flash: release `firmware.bin` → app slot `0x20000`.
+  No file picker, no config UI, no status page.
 
 ## What runs where
 
 | Feature | How (no server) |
 |---|---|
-| Board pick + info | WebSerial `requestPort` + esptool-js `main()` (chip), `readMac` (guarded) |
-| App version | WebSerial raw: reset board, regex `App version:` from boot log |
+| Board pick | WebSerial `requestPort` (per-card USB filters) |
+| Board model | Static catalog (`boards.js`) + chip name from esptool-js |
+| App version | WebSerial raw: reset board, regex `App version:` from boot |
 | Firmware list | `fetch` api.github.com (CORS-open) |
-| Browser flash | esptool-js `writeFlash` to `0x20000` (CDN bundle; file picker or Worker-proxied release URL). NVS never touched |
-| Config read | esptool-js `readFlash(0x9000)` + `nvs.js` parse |
-| Config save | `nvs.js` generate (merge over live read) + `writeFlash` NVS |
-| Release proxy | `functions/api/dl.js` (Worker: same-repo URLs only, 4MB cap, CORS `*`) |
+| Browser flash | esptool-js `writeFlash` to `0x20000` (CDN bundle) |
+| Release proxy | `functions/api/dl.js` (Worker: same-repo URLs only, 4MB cap) |
 
-## `nvs.js` correctness (the load-bearing part)
+## NVS note
 
-Parser + generator ported from `host/portal/nvs.py` + the IDF generator.
-Proven, not guessed:
-
-- `test/run.cjs` (`node test/run.cjs`): self roundtrips + layout asserts.
-- **Byte-identical** to IDF `nvs_partition_gen` output for the qesp key
-  set (`cmp` clean on 24KB images).
-- Parses the **live board dump** exactly like the Python parser
-  (all 8 keys, ssid, pass length, versions).
-- NVS CRC quirk documented in code: the generator's
-  `zlib.crc32(x, 0xFFFFFFFF)` uses effective init register `0x00000000`.
+An earlier revision had a byte-exact JS NVS reader/generator for
+in-browser config editing (proven `cmp`-clean vs the IDF generator).
+Removed with the config UI (git history keeps it); the local portal
+(`host/portal/`) still does config via Python. If on-device config
+editing ever returns, port from history, don't reinvent.
 
 ## Honest limits
 
@@ -45,8 +48,6 @@ Proven, not guessed:
   (needs a hand on USB + browser); backend USB flow is proven via the
   local portal instead. Report issues.
 - Client-cert minting stays on the local portal (`host/portal/`):
-  signing needs the CA private key, which must never leave your PC —
-  Park it server-side (even Workers) would betray that. Mint locally,
-  distribute `.crt/.key` yourself.
+  signing needs the CA private key, which must never leave your PC.
 - NVS addresses (`0x9000`/`0x6000`) mirror `firmware/partitions.csv`;
   update both if the layout ever changes.
