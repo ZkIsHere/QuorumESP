@@ -20,9 +20,10 @@ Proxmox Node B (corosync-qdevice) ──┘                              FFSplit
 |---|---|
 | QDevice framing/handshake (plaintext + TLS mutual) | ✅ proven vs real `corosync-qdevice` |
 | FFSplit voting (tie / failover / keep-active) | ✅ proven 2-client live |
-| OTA update + automatic rollback | ✅ proven (update + rollback paths) |
-| GitHub Release OTA channel | ✅ CI builds + publishes |
-| Ethernet / Proxmox 2-node / Web UI | ⏳ later (see AGENTS.md §25) |
+| 4 concurrent sessions (self-assessed admission) | ✅ proven live (`FOUR` 4/4) |
+| Updates | ✅ external only — USB/portal flash, no on-device updater |
+| GitHub Release channel | ✅ CI builds + publishes `firmware.bin` for the portal |
+| Ethernet / Web UI | ⏳ later (see AGENTS.md §25) |
 
 ## Repo layout
 
@@ -32,13 +33,15 @@ docs/                architecture.md, protocol.md, tls.md, ffsplit.md,
                      interop.md, hardware.md, ota.md
 host/                Node.js test harness (no deps): TLV/msg/session,
                      fake qnetd + fake 2nd client + TLS/TLS probes
-firmware/            ESP-IDF project (C, no malloc in protocol path)
+firmware/            ESP-IDF project (C)
   ├── common/        shared protocol constants
-  ├── qdevice/       TLV/msg codec, TCP server, session state machine
-  ├── quorum/        FFSplit decision core
-  ├── network/      Wi-Fi dev transport, mbedTLS server, SNTP
-  ├── ota/           update engine + rollback guard
-  └── ...            config, storage, watchdog, web (stubs/scaffold)
+  ├── qdevice/       TLV/msg codec + multi-client TCP server
+  ├── quorum/        FFSplit + LMS decision cores
+  ├── network/       Wi-Fi dev transport, TLS (menuconfig certs), SNTP
+  ├── ...            config (NVS), watchdog, web (read-only UI)
+host/                Node harness + Python probes + PC/USB portal
+  portal/           local portal (USB flash, config, cert minting)
+  portal-static/    Cloudflare Pages portal (WebSerial, no server)
 ```
 
 ## Quickstart (developers)
@@ -51,12 +54,13 @@ firmware/            ESP-IDF project (C, no malloc in protocol path)
 5. Firmware: ESP-IDF v6.1, `idf.py set-target esp32 && idf.py build`
    (see `firmware/README.md`, `docs/hardware.md`, `docs/tls.md`).
 
-## Releases & OTA
+## Releases & updates
 
 Pushing a `v*` tag builds firmware in CI (self-hosted runner, cached IDF)
-and publishes a GitHub Release with `firmware.bin` + `version.txt`. Devices
-with `QUORUMESP_OTA_GITHUB_REPO` set pull updates over HTTPS on boot, with
-automatic rollback on failed health checks. Details: `docs/ota.md`.
+and publishes a GitHub Release with `firmware.bin` + `version.txt`. There
+is NO on-device auto-updater by design — flash via USB (`idf.py flash`)
+or the portals (`host/portal/`, `host/portal-static/`). Details:
+`docs/ota.md`.
 
 ## Hardware (current)
 
